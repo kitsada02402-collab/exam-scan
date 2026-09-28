@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<title>สแกนกระดาษคำตอบ (กล้องสด)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --blue: #1E62C8; --ink: #1D3557; --muted: #6B7A90; --line: #DCE7F7; --bg: #EEF4FC; --ok: #1E8E5A; --bad: #C93C3C; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font-family: 'Sarabun', 'Leelawadee UI', sans-serif; color: var(--ink); background: var(--bg); -webkit-text-size-adjust: 100%; }
+  .hidden { display: none !important; }
+  .page { max-width: 520px; margin: 0 auto; padding: calc(16px + env(safe-area-inset-top, 0px)) 14px 40px; }
+  .hero { background: #FFF6D6; border: 1px solid #F1E0A0; border-radius: 20px; padding: 18px 20px; margin-bottom: 14px; }
+  .hero h1 { margin: 0; font-size: 1.3rem; color: var(--blue); }
+  .hero p { margin: 4px 0 0; color: var(--muted); font-size: .95rem; }
+  .panel { background: #fff; border: 1px solid var(--line); border-radius: 20px; padding: 20px 18px; }
+  .q { margin: 16px 0 8px; font-weight: 700; }
+  .field { width: 100%; min-height: 56px; padding: 12px 16px; font: inherit; color: var(--ink); background: #F7FAFF; border: 2px solid var(--line); border-radius: 14px; }
+  .btn { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 56px; margin-top: 14px; border: none; border-radius: 14px; font: inherit; font-weight: 700; font-size: 1.05rem; background: var(--blue); color: #fff; cursor: pointer; }
+  .btn.soft { background: #E8F1FE; color: var(--blue); }
+  .btn:disabled { opacity: .7; }
+  .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .choice input { position: absolute; opacity: 0; }
+  .choice span { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 80px; border: 2px solid var(--line); border-radius: 14px; background: #F7FAFF; font-weight: 700; cursor: pointer; text-align: center; }
+  .choice input:checked + span { background: #E8F1FE; border-color: #6FA6EC; }
+  .err { display: none; margin-top: 10px; color: var(--bad); font-weight: 600; }
+  .err.show { display: block; }
+  .hint { margin-top: 8px; font-size: .88rem; color: var(--muted); }
+  .link { background: none; border: none; color: var(--muted); font: inherit; font-size: .88rem; text-decoration: underline; margin-top: 14px; cursor: pointer; }
+
+  /* กล้อง */
+  .cam { position: fixed; inset: 0; background: #111418; color: #fff; }
+  .cam video, .cam canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .cam-top { position: absolute; left: 0; right: 0; top: 0; padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 10px; background: linear-gradient(#000c, #0000); }
+  .who { font-size: .82rem; opacity: .8; margin-bottom: 6px; }
+  .banner { padding: 12px 14px; border-radius: 14px; font-weight: 700; font-size: 1.05rem; background: #1E62C8e6; text-align: center; }
+  .banner.hold { background: #C99A00e6; }
+  .banner.done { background: #1E8E5Ae6; }
+  .banner.warn { background: #C93C3Ce6; }
+  .cam-bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px)); background: linear-gradient(#0000, #000c); }
+  .last { display: flex; gap: 10px; align-items: center; padding: 8px; margin-bottom: 8px; background: #ffffffee; color: var(--ink); border-radius: 12px; font-size: .92rem; }
+  .last img { width: 44px; height: 62px; object-fit: cover; object-position: top; border-radius: 6px; }
+  .cam-bar { display: flex; gap: 8px; align-items: center; }
+  .cam-bar .count { flex: 1; font-weight: 700; font-size: 1.05rem; }
+  .cam-bar button { min-width: 52px; height: 52px; border: none; border-radius: 14px; background: #ffffff26; color: #fff; font: inherit; font-size: 1.1rem; font-weight: 700; cursor: pointer; padding: 0 12px; }
+  .cam-bar button.on { background: #FFD43B; color: #111; }
+
+  /* รายการ */
+  .sheet { position: fixed; inset: 0; z-index: 20; overflow: auto; background: var(--bg); padding: calc(14px + env(safe-area-inset-top, 0px)) 12px 30px; }
+  .sheet-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; max-width: 560px; margin: 0 auto 10px; }
+  .sheet-head h2 { margin: 0; font-size: 1.2rem; color: var(--blue); }
+  .sheet-head button { min-height: 44px; padding: 0 14px; border: none; border-radius: 12px; background: #E8F1FE; color: var(--blue); font: inherit; font-weight: 700; }
+  #items { max-width: 560px; margin: 0 auto; }
+  .li { display: flex; gap: 10px; align-items: center; margin-top: 8px; padding: 10px; background: #fff; border: 2px solid var(--line); border-radius: 12px; }
+  .li img { width: 48px; height: 68px; object-fit: cover; object-position: top; border-radius: 6px; border: 1px solid var(--line); }
+  .li-main { flex: 1; min-width: 0; line-height: 1.45; font-size: .93rem; }
+  .li-main span { color: var(--muted); }
+  .li .er { color: var(--bad); }
+  .li.st-saved { border-color: #B5E3CB; background: #F2FBF6; }
+  .li.st-error { border-color: #F2BDBD; background: #FFF5F5; }
+  .li.st-conflict { border-color: #F1E0A0; background: #FFFBEA; }
+  .li-acts { display: grid; gap: 6px; }
+  .li-acts button { min-height: 40px; padding: 0 12px; border: none; border-radius: 10px; background: #E8F1FE; color: var(--blue); font: inherit; font-weight: 700; }
+  .empty { text-align: center; color: var(--muted); padding: 30px 0; }
+  .toast { position: fixed; left: 50%; bottom: 24px; z-index: 99; transform: translateX(-50%); padding: 12px 20px; border-radius: 999px; background: #1D3557; color: #fff; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 92vw; }
+  .toast.show { opacity: 1; }
+  .toast.error { background: var(--bad); }
+
+  /* หน้าต่างยืนยัน (แบบเดียวกับระบบหลัก) */
+  .dlg-bg { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(40,48,60,.45); }
+  .dlg-bg.out { opacity: 0; transition: opacity .15s; }
+  .dlg { width: 100%; max-width: 440px; max-height: 90vh; overflow: auto; padding: 26px 22px 20px; background: #fff; border-radius: 14px; text-align: center; }
+  .dlg-icon { width: 80px; height: 80px; margin: 0 auto 14px; display: flex; align-items: center; justify-content: center; border: 4px solid; border-radius: 50%; font-size: 46px; font-family: Arial, sans-serif; }
+  .dlg-icon.question { border-color: #87ADBD; color: #87ADBD; } .dlg-icon.info { border-color: #3FC3EE; color: #3FC3EE; }
+  .dlg-icon.warning { border-color: #F8BB86; color: #F8BB86; } .dlg-icon.danger { border-color: #F27474; color: #F27474; } .dlg-icon.success { border-color: #A5DC86; color: #A5DC86; }
+  .dlg-title { margin: 0 0 12px; font-size: 1.45rem; color: #545454; }
+  .dlg-body { text-align: left; color: #545454; line-height: 1.6; }
+  .dlg-note { margin: 10px 0 0; color: #6b6b6b; font-size: .95rem; }
+  .dlg-btns { display: flex; justify-content: center; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+  .dlg-ok, .dlg-cancel { min-width: 120px; min-height: 46px; border: none; border-radius: 8px; font: inherit; font-weight: 600; color: #fff; background: #2F86DE; }
+  .dlg-ok.danger { background: #DD3333; } .dlg-cancel { background: #6E7881; }
+</style>
+</head>
+<body>
+<!-- ================= เข้าสู่ระบบ ================= -->
+<div id="loginView" class="page hidden">
+  <div class="hero"><h1>📹 สแกนกระดาษคำตอบ (กล้องสด)</h1><p>วางกระดาษให้กล้องเห็น ระบบถ่ายและอ่านให้อัตโนมัติ</p></div>
+  <div class="panel">
+    <div id="apiBox" class="hidden">
+      <div class="q">ตั้งค่าครั้งแรก: ลิงก์ระบบ</div>
+      <input class="field" id="apiIn" placeholder="https://script.google.com/macros/s/.../exec">
+      <div class="hint">คัดลอกจากหน้าแอดมิน เมนูคะแนน > สแกน ปุ่ม "📹 กล้องสด" จะใส่ให้เอง</div>
+      <button class="btn" id="btnApi">บันทึกลิงก์</button>
+    </div>
+    <div id="loginBox" class="hidden">
+      <div class="choices">
+        <label class="choice"><input type="radio" name="role" value="staff" checked><span>👤<br>เจ้าหน้าที่</span></label>
+        <label class="choice"><input type="radio" name="role" value="admin"><span>🔐<br>แอดมิน</span></label>
+      </div>
+      <div class="q" id="loginLabel">เลขบัตรประชาชน 13 หลัก</div>
+      <input class="field" id="loginIn" inputmode="numeric" autocomplete="off">
+      <div class="err" id="loginErr"></div>
+      <button class="btn" id="btnLogin">เข้าสู่ระบบและเปิดกล้อง</button>
+      <div class="hint">ใช้บัญชีที่แอดมินให้สิทธิ์ "สแกนกระดาษคำตอบ" แล้ว</div>
+      <button class="link" id="btnChangeApi">เปลี่ยนลิงก์ระบบ</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= กล้อง ================= -->
+<div id="camView" class="cam hidden">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="overlay"></canvas>
+  <div class="cam-top"><div class="who" id="who"></div><div id="banner" class="banner">กำลังเปิดกล้อง…</div></div>
+  <div class="cam-bottom">
+    <div id="last" class="last hidden"></div>
+    <div class="cam-bar">
+      <span class="count" id="count">💾 0</span>
+      <button id="btnTorch" class="hidden" aria-label="ไฟฉาย">🔦</button>
+      <button id="btnPause" aria-label="หยุดชั่วคราว">⏸</button>
+      <button id="btnList">📋 รายการ</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= รายการที่สแกน ================= -->
+<div id="listView" class="sheet hidden">
+  <div class="sheet-head"><button id="btnBack">← กลับไปสแกน</button><h2>รายการที่สแกน</h2><button id="btnLogout">ออก</button></div>
+  <div id="items"></div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+/* =====================================================================
+ * หน้าต่างยืนยัน/แจ้งเตือนแบบเดียวกันทุกหน้า (ไอคอนวงกลม หัวข้อใหญ่ ปุ่มยืนยัน + ยกเลิก)
+ *   Dlg.confirm({ icon, title, html, okText, cancelText, danger, onOk(btn, close) }) -> Promise<true|false>
+ *   Dlg.alert({ icon, title, html })
+ *   Dlg.rows([[['ป้าย', 'ค่า'], ...], [...]])  -> สรุปข้อมูลเป็นกลุ่ม
+ * icon: question | warning | danger | success | info
+ * ===================================================================== */
+const Dlg = (() => {
+  let cur = null;
+  const ICON = { question: '?', warning: '!', danger: '!', success: '✓', info: 'i' };
+  const safe = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function close(result) {
+    if (!cur) return;
+    const c = cur;
+    cur = null;
+    document.removeEventListener('keydown', c.key);
+    c.bg.classList.add('out');
+    setTimeout(() => c.bg.remove(), 160);
+    c.resolve(!!result);
+  }
+
+  function open(o) {
+    if (cur) close(false);
+    o = o || {};
+    return new Promise(resolve => {
+      const icon = o.icon || (o.danger ? 'danger' : 'question');
+      const bg = document.createElement('div');
+      bg.className = 'dlg-bg';
+      bg.innerHTML =
+        '<div class="dlg" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">' +
+        '<div class="dlg-icon ' + icon + '" aria-hidden="true">' + (ICON[icon] || '?') + '</div>' +
+        '<h2 class="dlg-title" id="dlgTitle"></h2>' +
+        '<div class="dlg-body"></div>' +
+        '<div class="dlg-btns"><button type="button" class="dlg-ok' + (o.danger ? ' danger' : '') + '"></button>' +
+        (o.cancelText === false ? '' : '<button type="button" class="dlg-cancel"></button>') + '</div></div>';
+      bg.querySelector('.dlg-title').textContent = o.title || '';
+      bg.querySelector('.dlg-body').innerHTML = o.html || '';
+      const ok = bg.querySelector('.dlg-ok');
+      const cancel = bg.querySelector('.dlg-cancel');
+      ok.textContent = o.okText || 'ตกลง';
+      if (cancel) cancel.textContent = o.cancelText || 'ยกเลิก';
+      const key = e => { if (e.key === 'Escape' && !ok.disabled) close(false); };
+      cur = { bg: bg, resolve: resolve, key: key };
+      ok.addEventListener('click', () => { if (o.onOk) o.onOk(ok, () => close(true)); else close(true); });
+      if (cancel) cancel.addEventListener('click', () => { if (!ok.disabled) close(false); });
+      bg.addEventListener('click', e => { if (e.target === bg && !ok.disabled) close(false); });
+      document.addEventListener('keydown', key);
+      document.body.appendChild(bg);
+      setTimeout(() => ok.focus(), 60);
+    });
+  }
+
+  function rows(groups) {
+    return groups.map(g => '<div class="dlg-grp">' +
+      g.map(r => '<div><b>' + safe(r[0]) + ':</b> ' + r[1] + '</div>').join('') + '</div>').join('');
+  }
+
+  const TH_M = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+  function now() {
+    const d = new Date();
+    return d.getDate() + ' ' + TH_M[d.getMonth()] + ' ' + (d.getFullYear() + 543) + ' เวลา ' +
+      ('0' + d.getHours()).slice(-2) + '.' + ('0' + d.getMinutes()).slice(-2) + ' น.';
+  }
+
+  return {
+    open: open, confirm: open, rows: rows, now: now, safe: safe,
+    alert: o => open(Object.assign({ cancelText: false, okText: 'ตกลง', icon: 'info' }, o)),
+    close: () => close(false),
+    isOpen: () => !!cur
+  };
+})();
+</script>
+<script>
+/* =====================================================================
+ * ตัวอ่านกระดาษคำตอบ (ทำงานในเบราว์เซอร์ ไม่ส่งรูปเต็มไปเซิร์ฟเวอร์)
+ * ตำแหน่งทุกอย่างเป็น มม. ต้องตรงกับ Print.html (กระดาษคำตอบ)
+ * ขั้นตอน: หาสี่เหลี่ยมดำ 4 มุม -> คำนวณการบิดของภาพ -> ดัดภาพให้ตรง -> อ่าน QR -> วัดความเข้มของวงฝน
+ * ===================================================================== */
+const OMR = (() => {
+  const G = {
+    markers: [[14, 14], [196, 14], [14, 283], [196, 283]],   // จุดกลางสี่เหลี่ยมดำ (TL, TR, BL, BR)
+    qr: { x: 162, y: 18, size: 30 },
+    colX: [16, 62, 108, 154], firstRowY: 92, rowPitch: 6.8, rowsPerCol: 25,
+    bubbleX0: 16, bubblePitch: 7.2, bubbleD: 4.6
+  };
+  const PX = 4;                      // ความละเอียดภาพที่ดัดแล้ว (พิกเซลต่อ มม.)
+  const PAGE_W = 210, PAGE_H = 297;
+  const TH = { blank: 0.30, mark: 0.45, gap: 0.20 };
+
+  let libsReady = null;
+  function loadScript(src) {
+    return new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = src; s.onload = res; s.onerror = () => rej(new Error('โหลดไลบรารีไม่สำเร็จ: ' + src));
+      document.head.appendChild(s);
+    });
+  }
+  /** jsQR อ่าน QR, pdf.js อ่านไฟล์ PDF จากเครื่องถ่ายเอกสาร (โหลดเมื่อเปิดหน้าสแกนเท่านั้น) */
+  function loadLibs() {
+    if (!libsReady) {
+      libsReady = Promise.all([
+        typeof jsQR !== 'undefined' ? 0 : loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js'),
+        typeof pdfjsLib !== 'undefined' ? 0 : loadScript('https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js')
+      ]).then(() => {
+        if (typeof pdfjsLib !== 'undefined') {
+          pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+        }
+      });
+    }
+    return libsReady;
+  }
+
+  // ---------------- ภาพ -> canvas ----------------
+  function fileToImage(file) {
+    return new Promise((res, rej) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); res(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('เปิดรูปไม่ได้')); };
+      img.src = url;
+    });
+  }
+  function toCanvas(src, maxSide) {
+    const w0 = src.naturalWidth || src.width, h0 = src.naturalHeight || src.height;
+    const k = Math.min(1, maxSide / Math.max(w0, h0));
+    const c = document.createElement('canvas');
+    c.width = Math.round(w0 * k); c.height = Math.round(h0 * k);
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    return c;
+  }
+  /** แปลงไฟล์ที่เลือก (รูปหรือ PDF หลายหน้า) เป็นรายการ canvas ทีละหน้า */
+  async function* pagesFromFile(file) {
+    if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
+      await loadLibs();
+      const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const vp0 = page.getViewport({ scale: 1 });
+        const scale = 2000 / Math.max(vp0.width, vp0.height);
+        const vp = page.getViewport({ scale: scale });
+        const c = document.createElement('canvas');
+        c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        yield { canvas: c, label: file.name + ' หน้า ' + i };
+      }
+    } else {
+      const img = await fileToImage(file);
+      yield { canvas: toCanvas(img, 2000), label: file.name };
+    }
+  }
+
+  function gray(canvas) {
+    const w = canvas.width, h = canvas.height;
+    const d = canvas.getContext('2d').getImageData(0, 0, w, h).data;
+    const g = new Uint8ClampedArray(w * h);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+    return { g: g, w: w, h: h };
+  }
+  function downscale(G0, maxSide) {
+    const k = Math.min(1, maxSide / Math.max(G0.w, G0.h));
+    if (k === 1) return { g: G0.g, w: G0.w, h: G0.h, k: 1 };
+    const w = Math.round(G0.w * k), h = Math.round(G0.h * k);
+    const g = new Uint8ClampedArray(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[y * w + x] = G0.g[Math.min(G0.h - 1, Math.round(y / k)) * G0.w + Math.min(G0.w - 1, Math.round(x / k))];
+    return { g: g, w: w, h: h, k: k };
+  }
+
+  // ---------------- หาสี่เหลี่ยมดำ 4 มุม ----------------
+  function findMarkers(S) {
+    const { g, w, h } = S;
+    // เทียบกับค่าเฉลี่ยรอบๆ (กันแสงไม่เท่ากันในรูปถ่าย)
+    const I = new Float64Array((w + 1) * (h + 1));
+    for (let y = 0; y < h; y++) { let row = 0; for (let x = 0; x < w; x++) { row += g[y * w + x]; I[(y + 1) * (w + 1) + x + 1] = I[y * (w + 1) + x + 1] + row; } }
+    const r = Math.max(8, Math.round(Math.max(w, h) / 16));
+    const bin = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      const y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+      for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
+        const mean = (I[y1 * (w + 1) + x1] - I[y0 * (w + 1) + x1] - I[y1 * (w + 1) + x0] + I[y0 * (w + 1) + x0]) / ((x1 - x0) * (y1 - y0));
+        bin[y * w + x] = (g[y * w + x] < mean * 0.62 && g[y * w + x] < 140) ? 1 : 0;
+      }
+    }
+    // กลุ่มพิกเซลดำที่ติดกัน
+    const lab = new Int32Array(w * h);
+    const comps = [];
+    const stack = new Int32Array(w * h);
+    let id = 0;
+    for (let i = 0; i < w * h; i++) {
+      if (!bin[i] || lab[i]) continue;
+      id++;
+      let sp = 0, n = 0, sx = 0, sy = 0, minx = w, maxx = 0, miny = h, maxy = 0;
+      stack[sp++] = i; lab[i] = id;
+      while (sp) {
+        const p = stack[--sp], px = p % w, py = (p / w) | 0;
+        n++; sx += px; sy += py;
+        if (px < minx) minx = px; if (px > maxx) maxx = px; if (py < miny) miny = py; if (py > maxy) maxy = py;
+        if (px > 0 && bin[p - 1] && !lab[p - 1]) { lab[p - 1] = id; stack[sp++] = p - 1; }
+        if (px < w - 1 && bin[p + 1] && !lab[p + 1]) { lab[p + 1] = id; stack[sp++] = p + 1; }
+        if (py > 0 && bin[p - w] && !lab[p - w]) { lab[p - w] = id; stack[sp++] = p - w; }
+        if (py < h - 1 && bin[p + w] && !lab[p + w]) { lab[p + w] = id; stack[sp++] = p + w; }
+      }
+      const bw = maxx - minx + 1, bh = maxy - miny + 1, side = Math.max(w, h);
+      if (bw < side * 0.008 || bh < side * 0.008 || bw > side * 0.08 || bh > side * 0.08) continue;
+      const asp = bw / bh;
+      if (asp < 0.6 || asp > 1.66) continue;
+      if (n / (bw * bh) < 0.72) continue;
+      // ต้องทึบทั้งก้อน (กันไม่ให้จับกรอบของ QR code)
+      let dark = 0;
+      [0.2, 0.35, 0.5, 0.65, 0.8].forEach(fy => [0.2, 0.35, 0.5, 0.65, 0.8].forEach(fx => {
+        dark += bin[Math.round(miny + fy * (bh - 1)) * w + Math.round(minx + fx * (bw - 1))];
+      }));
+      if (dark < 23) continue;
+      comps.push({ x: sx / n, y: sy / n, size: (bw + bh) / 2 });
+    }
+    if (comps.length < 4) return null;
+    const corners = [[0, 0], [w, 0], [0, h], [w, h]];
+    const used = new Set();
+    const pick = corners.map(([cx, cy]) => {
+      let best = null, bd = Infinity;
+      comps.forEach((c, i) => { if (used.has(i)) return; const d = Math.hypot(c.x - cx, c.y - cy); if (d < bd) { bd = d; best = i; } });
+      used.add(best);
+      return comps[best];
+    });
+    // ตรวจความสมเหตุสมผล: ขนาดใกล้กัน และเป็นสี่เหลี่ยม
+    const sizes = pick.map(p => p.size), smax = Math.max.apply(null, sizes), smin = Math.min.apply(null, sizes);
+    if (smin < smax * 0.4) return null;
+    const top = Math.hypot(pick[1].x - pick[0].x, pick[1].y - pick[0].y);
+    const left = Math.hypot(pick[2].x - pick[0].x, pick[2].y - pick[0].y);
+    if (top < w * 0.3 && left < h * 0.3) return null;
+    return pick.map(p => [p.x, p.y]);        // TL, TR, BL, BR ตามตำแหน่งในภาพ
+  }
+
+  // ---------------- homography (มม. -> พิกเซล) ----------------
+  function solveH(src, dst) {
+    const A = [], b = [];
+    for (let i = 0; i < 4; i++) {
+      const [u, v] = src[i], [x, y] = dst[i];
+      A.push([u, v, 1, 0, 0, 0, -u * x, -v * x]); b.push(x);
+      A.push([0, 0, 0, u, v, 1, -u * y, -v * y]); b.push(y);
+    }
+    for (let c = 0; c < 8; c++) {
+      let p = c;
+      for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+      [A[c], A[p]] = [A[p], A[c]]; [b[c], b[p]] = [b[p], b[c]];
+      for (let r = 0; r < 8; r++) {
+        if (r === c) continue;
+        const f = A[r][c] / A[c][c];
+        for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k];
+        b[r] -= f * b[c];
+      }
+    }
+    const hh = b.map((v, i) => v / A[i][i]);
+    return [hh[0], hh[1], hh[2], hh[3], hh[4], hh[5], hh[6], hh[7], 1];
+  }
+  const apply = (H, u, v) => { const z = H[6] * u + H[7] * v + 1; return [(H[0] * u + H[1] * v + H[2]) / z, (H[3] * u + H[4] * v + H[5]) / z]; };
+
+  /** ดัดภาพส่วน [x0,y0,w,h] มม. ให้ตรง ที่ความละเอียด px พิกเซล/มม. */
+  function warp(srcCanvas, H, x0, y0, wmm, hmm, px) {
+    const sw = srcCanvas.width, sh = srcCanvas.height;
+    const sd = srcCanvas.getContext('2d').getImageData(0, 0, sw, sh).data;
+    const W = Math.round(wmm * px), Hh = Math.round(hmm * px);
+    const out = document.createElement('canvas');
+    out.width = W; out.height = Hh;
+    const ctx = out.getContext('2d');
+    const od = ctx.createImageData(W, Hh);
+    for (let y = 0; y < Hh; y++) {
+      for (let x = 0; x < W; x++) {
+        const [sx, sy] = apply(H, x0 + (x + 0.5) / px, y0 + (y + 0.5) / px);
+        const ix = Math.min(sw - 1, Math.max(0, sx | 0)), iy = Math.min(sh - 1, Math.max(0, sy | 0));
+        const si = (iy * sw + ix) * 4, oi = (y * W + x) * 4;
+        od.data[oi] = sd[si]; od.data[oi + 1] = sd[si + 1]; od.data[oi + 2] = sd[si + 2]; od.data[oi + 3] = 255;
+      }
+    }
+    ctx.putImageData(od, 0, 0);
+    return out;
+  }
+
+  function readQR(canvas) {
+    if (typeof jsQR === 'undefined') return null;
+    const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    const r = jsQR(d.data, d.width, d.height, { inversionAttempts: 'dontInvert' });
+    return r ? r.data : null;
+  }
+
+  /** ลำดับมุมของกระดาษเทียบกับมุมของภาพ ตามการหมุน 0/90/180/270 องศา */
+  const ROT = { 0: [0, 1, 2, 3], 180: [3, 2, 1, 0], 90: [1, 3, 0, 2], 270: [2, 0, 3, 1] };
+
+  // ---------------- อ่าน 1 หน้า ----------------
+  function readPage(canvas) {
+    const G0 = gray(canvas);
+    const S = downscale(G0, 900);
+    const pts = findMarkers(S);
+    if (!pts) return { ok: false, error: 'หาสี่เหลี่ยมดำไม่ครบ 4 มุม ถ่ายใหม่ให้เห็นครบทุกมุม' };
+    const img = pts.map(([x, y]) => [x / S.k, y / S.k]);
+    const tries = canvas.width > canvas.height ? [90, 270, 0, 180] : [0, 180, 90, 270];
+    let H = null, qr = null, rot = tries[0];
+    for (const t of tries) {
+      const Ht = solveH(G.markers, ROT[t].map(i => img[i]));
+      const txt = readQR(warp(canvas, Ht, G.qr.x, G.qr.y, G.qr.size, G.qr.size, 8));
+      if (!H) { H = Ht; rot = t; }
+      if (txt) { H = Ht; qr = txt; rot = t; break; }
+    }
+    const page = warp(canvas, H, 0, 0, PAGE_W, PAGE_H, PX);
+    return Object.assign({ ok: true, qr: qr, rotated: rot }, readBubbles(page), { page: page });
+  }
+
+  function readBubbles(page) {
+    const W = page.width, Hh = page.height;
+    const d = page.getContext('2d').getImageData(0, 0, W, Hh).data;
+    const lum = (x, y) => { const i = (Math.round(y) * W + Math.round(x)) * 4; return (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8; };
+    // ค่าขาวของกระดาษ = ค่าสว่างที่ 90% ของพื้นที่ช่องคำตอบ, ค่าดำ = ในสี่เหลี่ยมมุม
+    const samp = [];
+    for (let y = 80 * PX; y < 262 * PX; y += 7) for (let x = 14 * PX; x < 196 * PX; x += 7) samp.push(lum(x, y));
+    samp.sort((a, b) => a - b);
+    const white = samp[Math.floor(samp.length * 0.9)];
+    const black = G.markers.map(([u, v]) => lum(u * PX, v * PX)).reduce((a, b) => a + b, 0) / 4;
+    const span = Math.max(40, white - black);
+    const rIn = 1.45 * PX;
+    const fillAt = (u, v) => {
+      let s = 0, n = 0;
+      for (let dy = -rIn; dy <= rIn; dy++) for (let dx = -rIn; dx <= rIn; dx++) {
+        if (dx * dx + dy * dy > rIn * rIn) continue;
+        s += lum(u * PX + dx, v * PX + dy); n++;
+      }
+      return Math.max(0, Math.min(1, (white - s / n) / span));
+    };
+    const answers = [], fills = [], flags = [];
+    for (let q = 1; q <= 100; q++) {
+      const col = Math.floor((q - 1) / G.rowsPerCol), row = (q - 1) % G.rowsPerCol;
+      const v = G.firstRowY + row * G.rowPitch;
+      const f = [0, 1, 2, 3].map(k => fillAt(G.colX[col] + G.bubbleX0 + k * G.bubblePitch, v));
+      fills.push(f);
+      const order = [0, 1, 2, 3].sort((a, b) => f[b] - f[a]);
+      const a = f[order[0]], b = f[order[1]];
+      let ans = '0', flag = false;
+      if (a < TH.blank) { ans = '0'; flag = a > 0.2; }                         // ว่าง (จางๆ = น่าสงสัย)
+      else if (b >= TH.mark && a - b < 0.25) { ans = 'X'; flag = true; }       // ฝนหลายคำตอบ
+      else if (a >= TH.mark && a - b >= TH.gap) { ans = String(order[0] + 1); } // ชัดเจน
+      else { ans = String(order[0] + 1); flag = true; }                        // ไม่ชัด
+      answers.push(ans);
+      if (flag) flags.push(q);
+    }
+    return { answers: answers.join(''), fills: fills, flags: flags, white: white, black: black };
+  }
+
+  /** ภาพพรีวิว: ทำเครื่องหมายคำตอบที่อ่านได้ (เขียว) และข้อที่ต้องตรวจ (ส้ม) */
+  function preview(page, answers, flags, total, scale) {
+    const k = (scale || 3) / PX;
+    const c = document.createElement('canvas');
+    c.width = Math.round(page.width * k); c.height = Math.round(page.height * k);
+    const ctx = c.getContext('2d');
+    ctx.drawImage(page, 0, 0, c.width, c.height);
+    const s = (scale || 3);
+    ctx.lineWidth = Math.max(1.5, s * 0.5);
+    for (let q = 1; q <= (total || 100); q++) {
+      const col = Math.floor((q - 1) / G.rowsPerCol), row = (q - 1) % G.rowsPerCol;
+      const v = G.firstRowY + row * G.rowPitch;
+      const a = answers[q - 1];
+      const flagged = flags.indexOf(q) > -1;
+      if (a >= '1' && a <= '4') {
+        const u = G.colX[col] + G.bubbleX0 + (Number(a) - 1) * G.bubblePitch;
+        ctx.strokeStyle = flagged ? '#F08C00' : '#12A150';
+        ctx.beginPath(); ctx.arc(u * s, v * s, G.bubbleD * 0.75 * s, 0, Math.PI * 2); ctx.stroke();
+      }
+      if (flagged) {
+        ctx.fillStyle = 'rgba(240,140,0,.18)';
+        ctx.fillRect((G.colX[col] - 1) * s, (v - G.rowPitch / 2) * s, 44 * s, G.rowPitch * s);
+      }
+    }
+    return c;
+  }
+
+  /** ภาพหน้ากระดาษที่ดัดแล้วเป็น JPEG (ส่งเก็บไว้ให้ผู้ตรวจทานดู) */
+  function jpeg(canvas, pxPerMm, quality) {
+    const k = pxPerMm / PX;
+    const c = document.createElement('canvas');
+    c.width = Math.round(canvas.width * k); c.height = Math.round(canvas.height * k);
+    c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', quality || 0.7);
+  }
+
+  /** ตรวจเร็วๆ ว่าเห็นสี่เหลี่ยมดำครบ 4 มุมไหม (ใช้กับกล้องสด) คืนจุด 4 มุมเป็นสัดส่วน 0-1 ของภาพ */
+  function detect(canvas) {
+    const S = downscale(gray(canvas), 560);
+    const pts = findMarkers(S);
+    return pts ? pts.map(([x, y]) => [x / S.w, y / S.h]) : null;
+  }
+
+  return { G: G, loadLibs: loadLibs, pagesFromFile: pagesFromFile, readPage: readPage, preview: preview, toCanvas: toCanvas, jpeg: jpeg, detect: detect };
+})();
+</script>
+<script>/* =====================================================================
+ * หน้าสแกนกล้องสด (วางบน GitHub Pages)
+ * ส่งข้อมูลไปที่ระบบหลักผ่านลิงก์ Apps Script (.../exec) ด้วย POST
+ * ===================================================================== */
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const qs = new URLSearchParams(location.search);
+if (qs.get('api')) { try { localStorage.setItem('scanApi', qs.get('api')); } catch (e) {} history.replaceState(null, '', location.pathname); }
+let API = (() => { try { return localStorage.getItem('scanApi') || ''; } catch (e) { return ''; } })();
+let TOKEN = (() => { try { return sessionStorage.getItem('scanTok') || ''; } catch (e) { return ''; } })();
+let DATA = null;
+const ITEMS = [];
+
+function toast(msg, bad) {
+  const t = $('toast');
+  t.textContent = msg; t.className = 'toast show' + (bad ? ' error' : '');
+  clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 2600);
+}
+async function call(action, payload) {
+  const r = await fetch(API, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(Object.assign({ action: action, token: TOKEN }, payload || {}))
+  });
+  const j = await r.json();
+  if (!j.ok && /SESSION_EXPIRED/.test(j.error || '')) { logout('หมดเวลาเข้าสู่ระบบ เข้าสู่ระบบใหม่อีกครั้ง'); throw new Error('หมดเวลาเข้าสู่ระบบ'); }
+  return j;
+}
+
+// ================= เข้าสู่ระบบ =================
+function show(id) { ['loginView', 'camView', 'listView'].forEach(v => $(v).classList.toggle('hidden', v !== id)); }
+function logout(msg) {
+  TOKEN = ''; try { sessionStorage.removeItem('scanTok'); } catch (e) {}
+  stopCam(); show('loginView');
+  if (msg) { $('loginErr').textContent = msg; $('loginErr').classList.add('show'); }
+}
+function setupApiBox() {
+  $('apiBox').classList.toggle('hidden', !!API);
+  $('loginBox').classList.toggle('hidden', !API);
+}
+$('btnApi').addEventListener('click', () => {
+  const v = $('apiIn').value.trim();
+  if (!/^https:\/\/script\.google\.com\/.+\/exec/.test(v)) { toast('ลิงก์ต้องเป็นลิงก์ระบบที่ลงท้ายด้วย /exec', true); return; }
+  API = v; try { localStorage.setItem('scanApi', v); } catch (e) {}
+  setupApiBox();
+});
+document.querySelectorAll('input[name="role"]').forEach(r => r.addEventListener('change', () => {
+  const staff = r.value === 'staff';
+  $('loginLabel').textContent = staff ? 'เลขบัตรประชาชน 13 หลัก' : 'รหัสผ่านแอดมิน';
+  $('loginIn').type = staff ? 'text' : 'password';
+  $('loginIn').inputMode = staff ? 'numeric' : 'text';
+  $('loginIn').value = '';
+}));
+$('btnLogin').addEventListener('click', doLogin);
+$('loginIn').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+async function doLogin() {
+  const staff = document.querySelector('input[name="role"]:checked').value === 'staff';
+  const v = $('loginIn').value.trim();
+  if (!v) return;
+  const b = $('btnLogin'); b.disabled = true; b.textContent = 'กำลังตรวจสอบ…';
+  $('loginErr').classList.remove('show');
+  try {
+    const j = await call(staff ? 'staffLogin' : 'adminLogin', staff ? { idCard: v.replace(/\D/g, '') } : { password: v });
+    if (!j.ok) throw new Error(j.msg || j.error || 'เข้าสู่ระบบไม่สำเร็จ');
+    TOKEN = j.token; try { sessionStorage.setItem('scanTok', TOKEN); } catch (e) {}
+    DATA = j.data;
+    enterCam();
+  } catch (e) {
+    $('loginErr').textContent = e.message; $('loginErr').classList.add('show');
+  } finally { b.disabled = false; b.textContent = 'เข้าสู่ระบบและเปิดกล้อง'; }
+}
+$('btnChangeApi').addEventListener('click', () => { API = ''; try { localStorage.removeItem('scanApi'); } catch (e) {} setupApiBox(); });
+
+// ================= กล้องสด =================
+let stream = null, track = null, running = false, torchOn = false;
+let prev = null, stable = 0, locked = false, reading = false, missCount = 0;
+const video = $('video'), overlay = $('overlay');
+
+function enterCam() {
+  show('camView');
+  $('who').textContent = DATA.name + ' · ' + DATA.projectName;
+  updateCount();
+  startCam();
+}
+async function startCam() {
+  try {
+    await OMR.loadLibs();
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+  } catch (e) {
+    setBanner('❌ เปิดกล้องไม่ได้: ' + (e.message || e) + ' กดอนุญาตให้ใช้กล้องในเบราว์เซอร์', 'warn');
+    return;
+  }
+  video.srcObject = stream;
+  await video.play();
+  track = stream.getVideoTracks()[0];
+  const cap = track.getCapabilities ? track.getCapabilities() : {};
+  $('btnTorch').classList.toggle('hidden', !cap.torch);
+  running = true; prev = null; stable = 0;
+  loop();
+}
+function stopCam() {
+  running = false;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null; track = null;
+}
+$('btnTorch').addEventListener('click', async () => {
+  torchOn = !torchOn;
+  try { await track.applyConstraints({ advanced: [{ torch: torchOn }] }); } catch (e) { toast('เปิดไฟฉายไม่ได้', true); }
+  $('btnTorch').classList.toggle('on', torchOn);
+});
+$('btnPause').addEventListener('click', () => {
+  if (running) { stopCam(); $('btnPause').textContent = '▶️'; setBanner('⏸ หยุดชั่วคราว กด ▶️ เพื่อสแกนต่อ', 'idle'); }
+  else { $('btnPause').textContent = '⏸'; startCam(); }
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && running) { stopCam(); $('btnPause').textContent = '▶️'; }
+});
+
+function frame(maxSide) {
+  const w = video.videoWidth, h = video.videoHeight;
+  const k = Math.min(1, maxSide / Math.max(w, h));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * k); c.height = Math.round(h * k);
+  c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+  return c;
+}
+function setBanner(txt, kind) { const b = $('banner'); b.textContent = txt; b.className = 'banner ' + (kind || ''); }
+function drawOverlay(pts) {
+  const r = video.getBoundingClientRect();
+  overlay.width = r.width; overlay.height = r.height;
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0, 0, r.width, r.height);
+  if (!pts || !video.videoWidth) return;
+  // วิดีโอแสดงแบบ contain: คำนวณพื้นที่ภาพจริงในกรอบ
+  const k = Math.min(r.width / video.videoWidth, r.height / video.videoHeight);
+  const vw = video.videoWidth * k, vh = video.videoHeight * k, ox = (r.width - vw) / 2, oy = (r.height - vh) / 2;
+  const P = pts.map(([x, y]) => [ox + x * vw, oy + y * vh]);
+  ctx.strokeStyle = locked ? '#8CE99A' : stable ? '#FFD43B' : '#74C0FC';
+  ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(P[0][0], P[0][1]); ctx.lineTo(P[1][0], P[1][1]); ctx.lineTo(P[3][0], P[3][1]); ctx.lineTo(P[2][0], P[2][1]); ctx.closePath(); ctx.stroke();
+  ctx.fillStyle = ctx.strokeStyle;
+  P.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill(); });
+}
+
+function loop() {
+  if (!running) return;
+  try { tick(); } catch (e) { console.error(e); }
+  setTimeout(loop, 160);
+}
+function tick() {
+  if (reading || !video.videoWidth) return;
+  const pts = OMR.detect(frame(640));
+  if (!pts) {
+    missCount++;
+    if (missCount > 3) { locked = false; stable = 0; prev = null; }   // เอากระดาษออกแล้ว พร้อมแผ่นถัดไป
+    drawOverlay(null);
+    if (!locked) setBanner('📄 วางกระดาษให้เห็นสี่เหลี่ยมดำครบ 4 มุม', 'idle');
+    return;
+  }
+  missCount = 0;
+  const move = prev ? Math.max.apply(null, pts.map((p, i) => Math.hypot(p[0] - prev[i][0], p[1] - prev[i][1]))) : 1;
+  prev = pts;
+  stable = move < 0.012 ? stable + 1 : 0;
+  drawOverlay(pts);
+  if (locked) return;
+  if (stable < 2) { setBanner('✋ ถือนิ่งๆ สักครู่…', 'hold'); return; }
+  capture();
+}
+
+let beepCtx = null;
+function beep(freq, ms, times) {
+  try {
+    beepCtx = beepCtx || new (window.AudioContext || window.webkitAudioContext)();
+    for (let i = 0; i < (times || 1); i++) {
+      const o = beepCtx.createOscillator(), g = beepCtx.createGain();
+      o.frequency.value = freq; o.connect(g); g.connect(beepCtx.destination);
+      const t = beepCtx.currentTime + i * (ms + 60) / 1000;
+      g.gain.setValueAtTime(0.2, t); o.start(t); o.stop(t + ms / 1000);
+    }
+  } catch (e) {}
+  if (navigator.vibrate) navigator.vibrate(times > 1 ? [80, 60, 80] : 90);
+}
+
+function capture() {
+  reading = true;
+  setBanner('📸 กำลังอ่าน…', 'hold');
+  setTimeout(() => {
+    let r;
+    try { r = OMR.readPage(frame(2000)); } catch (e) { r = { ok: false, error: e.message }; }
+    reading = false; stable = 0;
+    if (!r.ok) { setBanner('⚠️ ' + r.error, 'warn'); return; }
+    const m = /^(\d+)\|(\d)$/.exec(r.qr || '');
+    if (!m) { setBanner('⚠️ อ่าน QR ไม่ได้ ขยับกล้องให้ใกล้ขึ้นหรือเพิ่มแสง', 'warn'); return; }
+    const id = m[1];
+    if (ITEMS.some(x => x.id === id)) { locked = true; setBanner('🔁 รหัส ' + id + ' สแกนไปแล้ว เปลี่ยนแผ่นถัดไป', 'done'); beep(440, 90, 2); return; }
+    const st = DATA.students.find(s => s.id === id);
+    const lv = st ? st.level : 'ม.' + m[2];
+    const n = DATA.totals[lv] || 100;
+    const it = {
+      key: 'k' + Date.now(), id: id, qrLevel: m[2], level: lv, name: st ? st.name : '(ไม่พบในรายชื่อ)',
+      room: st ? st.room + ' ที่ ' + st.seat : '', answers: r.answers.slice(0, n), flags: r.flags.filter(q => q <= n),
+      image: OMR.jpeg(r.page, 3, 0.7), thumb: OMR.preview(r.page, r.answers.slice(0, n), r.flags.filter(q => q <= n), n, 2).toDataURL('image/jpeg', 0.6),
+      status: 'ready', error: ''
+    };
+    if (!st) { it.status = 'error'; it.error = 'ไม่พบรหัสนี้ในรายชื่อที่มีที่นั่ง'; }
+    else if ('ม.' + m[2] !== st.level) { it.status = 'error'; it.error = 'กระดาษของ ม.' + m[2] + ' แต่นักเรียนสอบ ' + st.level; }
+    ITEMS.unshift(it);
+    locked = true;
+    if (it.status === 'ready') {
+      beep(it.flags.length ? 660 : 880, 120, 1);
+      setBanner('✅ ' + it.name + (it.flags.length ? ' (ต้องดู ' + it.flags.length + ' ข้อ)' : '') + ' เปลี่ยนแผ่นถัดไป', 'done');
+    } else { beep(330, 120, 2); setBanner('❌ ' + it.error, 'warn'); }
+    showLast(it); updateCount(); upload();
+  }, 30);
+}
+function showLast(it) {
+  $('last').innerHTML = '<img src="' + it.thumb + '" alt=""><div><b>' + esc(it.name) + '</b><br><span>' + esc(it.id) + ' · ' + esc(it.room || it.level) +
+    (it.flags.length ? ' · ⚠️ ' + it.flags.length + ' ข้อ' : '') + '</span></div>';
+  $('last').classList.remove('hidden');
+}
+function updateCount() {
+  const saved = ITEMS.filter(x => x.status === 'saved').length;
+  const pend = ITEMS.filter(x => x.status === 'ready' || x.status === 'sending').length;
+  const bad = ITEMS.filter(x => x.status === 'error' || x.status === 'conflict').length;
+  $('count').innerHTML = '💾 ' + saved + (pend ? ' · ⏳ ' + pend : '') + (bad ? ' · ⚠️ ' + bad : '');
+}
+
+// ================= ส่งผลไประบบหลักทีละชุด (อัตโนมัติเบื้องหลัง) =================
+let uploading = false;
+async function upload() {
+  if (uploading) return;
+  // รายการที่ผู้ใช้กด "แทนที่" ส่งแยกชุด (overwrite) ไม่ปนกับแผ่นอื่น
+  const owItems = ITEMS.filter(x => x.status === 'ready' && x.ow);
+  const batch = owItems.length ? owItems.slice(0, 4) : ITEMS.filter(x => x.status === 'ready').slice(0, 4);
+  if (!batch.length) return;
+  uploading = true;
+  batch.forEach(x => x.status = 'sending');
+  renderList(); updateCount();
+  const ow = owItems.length > 0;
+  try {
+    const j = await call('saveScan', {
+      overwrite: ow,
+      items: batch.map(x => ({ key: x.key, id: x.id, level: x.qrLevel, answers: x.answers, flags: x.flags, image: x.image }))
+    });
+    if (!j.ok) throw new Error(j.error || 'บันทึกไม่สำเร็จ');
+    (j.conflicts || []).forEach(c => { const x = ITEMS.find(i => i.key === c.key); if (x) { x.status = 'conflict'; x.error = c.reason; } });
+    (j.saved || []).forEach(sv => { const x = ITEMS.find(i => i.key === sv.key); if (x) { x.status = 'saved'; x.total = sv.total; x.image = null; x.ow = false; } });
+    (j.errors || []).forEach(er => { const x = ITEMS.find(i => i.key === er.key); if (x) { x.status = 'error'; x.error = er.msg; } });
+    // ชุดที่มีคนติดเงื่อนไข เซิร์ฟเวอร์ยังไม่บันทึกใครเลย: ส่งคนที่เหลือใหม่
+    batch.forEach(x => { if (x.status === 'sending') x.status = 'ready'; });
+  } catch (e) {
+    batch.forEach(x => { if (x.status === 'sending') x.status = 'ready'; });
+    toast('ส่งไม่สำเร็จ จะลองใหม่: ' + e.message, true);
+    uploading = false; renderList(); updateCount();
+    setTimeout(() => upload(), 5000);
+    return;
+  }
+  uploading = false; renderList(); updateCount();
+  if (ITEMS.some(x => x.status === 'ready')) upload();
+}
+
+// ================= รายการ =================
+$('btnList').addEventListener('click', () => { renderList(); $('listView').classList.remove('hidden'); });
+$('btnBack').addEventListener('click', () => $('listView').classList.add('hidden'));
+$('btnLogout').addEventListener('click', () => logout(''));
+function renderList() {
+  const S = {
+    ready: '⏳ รอส่ง', sending: '⏳ กำลังส่ง…', saved: '💾 บันทึกแล้ว', conflict: '🔁 มีคะแนนอยู่แล้ว', error: '❌ ใช้ไม่ได้'
+  };
+  $('items').innerHTML = ITEMS.length ? ITEMS.map(x =>
+    '<div class="li st-' + x.status + '" data-k="' + x.key + '"><img src="' + x.thumb + '" alt="" data-act="zoom">' +
+    '<div class="li-main"><b>' + esc(x.name) + '</b><br><span>' + esc(x.id) + ' · ' + esc(x.room || x.level) + '</span><br>' +
+    '<span class="st">' + S[x.status] + (x.status === 'saved' ? ' ' + x.total + ' คะแนน' : '') + (x.flags.length && x.status !== 'error' ? ' · ⚠️ ' + x.flags.length + ' ข้อไปตรวจทาน' : '') + '</span>' +
+    (x.error ? '<br><span class="er">' + esc(x.error) + '</span>' : '') + '</div>' +
+    '<div class="li-acts">' + (x.status === 'conflict' ? '<button data-act="over">แทนที่</button>' : '') +
+    (x.status === 'error' || x.status === 'conflict' ? '<button data-act="del">ลบ</button>' : '') + '</div></div>').join('')
+    : '<p class="empty">ยังไม่มีแผ่นที่สแกน</p>';
+}
+$('items').addEventListener('click', e => {
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  const x = ITEMS.find(i => i.key === b.closest('.li').dataset.k);
+  if (b.dataset.act === 'zoom') Dlg.alert({ icon: 'info', title: x.name, html: '<img src="' + x.thumb + '" style="width:100%;border-radius:8px">' });
+  if (b.dataset.act === 'del') { ITEMS.splice(ITEMS.indexOf(x), 1); renderList(); updateCount(); }
+  if (b.dataset.act === 'over') {
+    Dlg.confirm({ icon: 'warning', danger: true, title: 'แทนที่คะแนนเดิม?',
+      html: Dlg.rows([[['นักเรียน', esc(x.name)], ['รหัส', esc(x.id)], ['เหตุผล', esc(x.error)]]]) + '<p class="dlg-note">คะแนนเดิมจะถูกแทนด้วยผลสแกนครั้งนี้</p>',
+      okText: 'แทนที่', cancelText: 'ไม่แทนที่' }).then(yes => { if (yes) { x.error = ''; x.ow = true; x.status = 'ready'; renderList(); upload(); } });
+  }
+});
+window.addEventListener('beforeunload', e => {
+  if (ITEMS.some(x => x.status === 'ready' || x.status === 'sending')) { e.preventDefault(); e.returnValue = ''; }
+});
+
+// ================= เริ่มต้น =================
+setupApiBox();
+if (API && TOKEN) {
+  call('scanBundle').then(j => { if (j.ok) { DATA = j.data; enterCam(); } else show('loginView'); }).catch(() => show('loginView'));
+} else show('loginView');
+</script>
+</body>
+</html>
