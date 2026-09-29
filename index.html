@@ -759,36 +759,77 @@ function diagnose(status, text) {
   if (status === 404) return 'ไม่พบลิงก์ระบบ (404) ลิงก์อาจผิดหรือ deployment ถูกลบ กด "เปลี่ยนลิงก์ระบบ" แล้ววางลิงก์ใหม่';
   return 'ระบบตอบกลับเป็นหน้าเว็บแทนข้อมูล' + (title ? ' (' + title + ')' : '') + ' ตรวจการ Deploy และลิงก์ระบบ';
 }
-async function call(action, payload) {
-  let r, text;
-  try {
-    r = await fetch(API, {
-      method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({ action: action, token: TOKEN }, payload || {}))
+// ---------- ทางเชื่อมต่อ 1: สะพาน (ฝังหน้า ?page=bridge แบบซ่อน แล้วคุยผ่าน postMessage) ----------
+let BRIDGE = null, bridgeWait = null, callSeq = 0, VIA = '';
+const WAITING = {};
+function initBridge() {
+  if (bridgeWait) return bridgeWait;
+  bridgeWait = new Promise(res => {
+    const f = document.createElement('iframe');
+    f.style.cssText = 'position:absolute;width:1px;height:1px;border:0;opacity:0;pointer-events:none';
+    f.src = API + (API.indexOf('?') > -1 ? '&' : '?') + 'page=bridge';
+    const t = setTimeout(() => res(null), 15000);
+    window.addEventListener('message', ev => {
+      const d = ev.data || {};
+      if (d.type === 'scan-bridge-ready') { if (!BRIDGE) { BRIDGE = ev.source; clearTimeout(t); res(BRIDGE); } }
+      else if (d.type === 'scan-result' && WAITING[d.id]) {
+        const w = WAITING[d.id]; delete WAITING[d.id];
+        if (d.error) w.rej(new Error(d.error)); else w.res(d.result);
+      }
     });
-    text = await r.text();
-  } catch (e) {
-    throw new Error('เชื่อมต่อระบบไม่ได้ (' + (e && e.message || e) + ')');
+    document.body.appendChild(f);
+  });
+  return bridgeWait;
+}
+async function viaBridge(body) {
+  const b = await initBridge();
+  if (!b) throw new Error('NOBRIDGE');
+  return new Promise((res, rej) => {
+    const id = ++callSeq;
+    WAITING[id] = { res: res, rej: rej };
+    b.postMessage({ type: 'scan-call', id: id, body: body }, '*');
+    setTimeout(() => { if (WAITING[id]) { delete WAITING[id]; rej(new Error('ระบบตอบช้าเกินไป')); } }, 90000);
+  });
+}
+// ---------- ทางเชื่อมต่อ 2: POST ตรง (สำรอง) ลองซ้ำเมื่อเน็ตสะดุด ----------
+async function viaFetch(body) {
+  let lastErr;
+  for (let i = 0; i < 3; i++) {
+    let r, text;
+    try {
+      r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+      text = await r.text();
+    } catch (e) { lastErr = e; await new Promise(z => setTimeout(z, 1200 * (i + 1))); continue; }
+    try { return JSON.parse(text); } catch (e) { throw new Error(diagnose(r.status, text)); }
   }
+  throw new Error('เชื่อมต่อระบบไม่ได้ (' + (lastErr && lastErr.message || lastErr) + ')');
+}
+async function call(action, payload) {
+  const body = Object.assign({ action: action, token: TOKEN }, payload || {});
   let j;
-  try { j = JSON.parse(text); } catch (e) { throw new Error(diagnose(r.status, text)); }
+  try { j = await viaBridge(body); VIA = 'สะพาน'; }
+  catch (e) {
+    if (e.message !== 'NOBRIDGE' && !/ช้าเกินไป/.test(e.message)) throw e;   // ระบบตอบกลับมาเป็นข้อผิดพลาดจริง
+    j = await viaFetch(body); VIA = 'POST ตรง';
+  }
   if (!j.ok && /SESSION_EXPIRED/.test(j.error || '')) { logout('หมดเวลาเข้าสู่ระบบ เข้าสู่ระบบใหม่อีกครั้ง'); throw new Error('หมดเวลาเข้าสู่ระบบ'); }
   return j;
 }
 /** ทดสอบการเชื่อมต่อ: เรียก ?page=ping แล้วลองส่งคำสั่งทดสอบ */
 async function testApi() {
   const out = [];
-  const url = API + (API.indexOf('?') > -1 ? '&' : '?') + 'page=ping';
-  const NEED = 3;       // เวอร์ชันของ Code.gs ที่หน้าสแกนนี้ต้องใช้ (มีคิดคะแนนก่อนบันทึก)
+  const NEED = 6;
+  const b = await initBridge();
+  out.push(b ? '✅ ทางสะพานพร้อม (เสถียรที่สุด)' : '⚠️ ทางสะพานไม่พร้อม (ยังไม่มีไฟล์ Bridge หรือยังไม่ Deploy) จะใช้ POST ตรงแทน');
   try {
     const j = await call('ping-test');
-    if (j && j.version >= NEED) out.push('✅ เชื่อมต่อระบบได้ และ Code.gs เป็นเวอร์ชันล่าสุด (v' + j.version + ')');
-    else if (j && j.error === 'ไม่รู้จักคำสั่ง') out.push('⚠️ เชื่อมต่อได้ แต่ Code.gs ยังเป็นเวอร์ชันเก่า: สแกนได้แต่จะไม่เห็นคะแนน ให้แทนที่ Code.gs ทั้งไฟล์ แล้ว Deploy > Manage deployments > ✏️ > New version');
+    if (j && j.version >= NEED) out.push('✅ เชื่อมต่อได้ผ่าน' + VIA + ' · Code.gs v' + j.version + ' (ล่าสุด)');
+    else if (j && j.error === 'ไม่รู้จักคำสั่ง') out.push('⚠️ เชื่อมต่อได้ แต่ Code.gs เป็นเวอร์ชันเก่า (v' + (j.version || '?') + ') ให้แทนที่ Code.gs และ Deploy New version');
     else out.push('⚠️ ตอบกลับ: ' + JSON.stringify(j).slice(0, 80));
   } catch (e) { out.push('❌ ' + e.message); }
   const cam = CAMRES ? CAMRES.w + '×' + CAMRES.h : 'ยังไม่ได้เปิดกล้อง';
   out.push((CAMRES && Math.max(CAMRES.w, CAMRES.h) < 1280 ? '⚠️' : 'ℹ️') + ' ความละเอียดกล้องล่าสุด: ' + cam);
-  Dlg.alert({ icon: out.every(x => x[0] === '✅') ? 'success' : 'warning', title: 'ผลทดสอบการเชื่อมต่อ',
+  Dlg.alert({ icon: out.every(x => x[0] !== '❌' && x[0] !== '⚠') ? 'success' : 'warning', title: 'ผลทดสอบการเชื่อมต่อ',
     html: '<div class="dlg-grp">' + out.map(esc).join('<br><br>') + '</div><p class="dlg-note">ลิงก์ที่ใช้: ' + esc(API) + '</p>' });
 }
 
@@ -806,7 +847,7 @@ function setupApiBox() {
 $('btnApi').addEventListener('click', () => {
   const v = $('apiIn').value.trim();
   if (!/^https:\/\/script\.google\.com\/.+\/exec/.test(v)) { toast('ลิงก์ต้องเป็นลิงก์ระบบที่ลงท้ายด้วย /exec', true); return; }
-  API = v; try { localStorage.setItem('scanApi', v); } catch (e) {}
+  API = v; BRIDGE = null; bridgeWait = null; try { localStorage.setItem('scanApi', v); } catch (e) {}
   setupApiBox();
 });
 document.querySelectorAll('input[name="role"]').forEach(r => r.addEventListener('change', () => {
@@ -1357,6 +1398,7 @@ window.addEventListener('beforeunload', e => {
 
 // ================= เริ่มต้น =================
 setupApiBox();
+if (API) initBridge();
 if (API && TOKEN) {
   call('scanBundle').then(j => { if (j.ok) { DATA = j.data; enterCam(); } else show('loginView'); }).catch(() => show('loginView'));
 } else show('loginView');
