@@ -63,6 +63,9 @@
   .rs-st { margin: 8px 0 4px; padding: 10px 12px; border-radius: 10px; font-weight: 700; background: #E6F6EE; color: var(--ok); }
   .rs-st.st-needid, .rs-st.st-flag { background: #FFF6D6; color: #8A6A00; }
   .rs-st.st-error { background: #FDECEC; color: var(--bad); }
+  .rs-score { margin: 6px 0; padding: 10px 12px; border-radius: 10px; background: #E8F1FE; color: var(--blue); font-size: 1.1rem; }
+  .rs-score b { font-size: 1.6rem; }
+  .rs-parts { font-size: .88rem; color: var(--muted); margin-top: 2px; }
   .rs-id { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 8px; }
   .rs-id .btn { margin: 0; width: auto; padding: 0 18px; }
   .rs-btns .btn { margin-top: 10px; }
@@ -134,6 +137,7 @@
       <div class="err" id="loginErr"></div>
       <button class="btn" id="btnLogin">เข้าสู่ระบบและเปิดกล้อง</button>
       <div class="hint">ใช้บัญชีที่แอดมินให้สิทธิ์ "สแกนกระดาษคำตอบ" แล้ว</div>
+      <button class="link" id="btnTestApi">🔌 ทดสอบการเชื่อมต่อ</button>
       <button class="link" id="btnChangeApi">เปลี่ยนลิงก์ระบบ</button>
     </div>
   </div>
@@ -261,7 +265,8 @@ const OMR = (() => {
     markers: [[14, 14], [196, 14], [14, 283], [196, 283]],   // จุดกลางสี่เหลี่ยมดำ (TL, TR, BL, BR)
     qr: { x: 162, y: 18, size: 30 },
     colX: [16, 62, 108, 154], firstRowY: 92, rowPitch: 6.8, rowsPerCol: 25,
-    bubbleX0: 16, bubblePitch: 7.2, bubbleD: 4.6
+    bubbleX0: 16, bubblePitch: 7.2, bubbleD: 4.6,
+    strip: { x0: 25, y: 272.5, step: 5, size: 3, n: 32 }       // แถบรหัสสำรองใต้ช่องลายมือชื่อ
   };
   const PX = 4;                      // ความละเอียดภาพที่ดัดแล้ว (พิกเซลต่อ มม.)
   const PAGE_W = 210, PAGE_H = 297;
@@ -460,9 +465,42 @@ const OMR = (() => {
 
   function readQR(canvas) {
     if (typeof jsQR === 'undefined') return null;
-    const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
-    const r = jsQR(d.data, d.width, d.height, { inversionAttempts: 'dontInvert' });
+    const ctx = canvas.getContext('2d');
+    const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let r = jsQR(d.data, d.width, d.height, { inversionAttempts: 'dontInvert' });
+    if (r) return r.data;
+    // ภาพเทา/แสงน้อย: ยืดความต่างสีให้เป็นขาวดำชัดก่อนอ่านอีกรอบ
+    const g = [];
+    for (let i = 0; i < d.data.length; i += 4) g.push(Math.min(d.data[i], d.data[i + 1], d.data[i + 2]));
+    const sorted = g.slice().sort((a, b) => a - b);
+    const lo = sorted[Math.floor(g.length * 0.05)], hi = sorted[Math.floor(g.length * 0.95)];
+    const cut = (lo + hi) / 2;
+    for (let i = 0, j = 0; j < g.length; i += 4, j++) { const v = g[j] < cut ? 0 : 255; d.data[i] = d.data[i + 1] = d.data[i + 2] = v; }
+    r = jsQR(d.data, d.width, d.height, { inversionAttempts: 'dontInvert' });
     return r ? r.data : null;
+  }
+
+  /** อ่านแถบรหัสสำรอง คืน 'รหัส|ระดับ' ถ้าตัวตรวจถูกต้อง */
+  function readStrip(page) {
+    const W = page.width;
+    const d = page.getContext('2d').getImageData(0, 0, W, page.height).data;
+    const ink = (x, y) => { const i = (Math.round(y) * W + Math.round(x)) * 4; return 255 - Math.min(d[i], d[i + 1], d[i + 2]); };
+    const S = G.strip, r = 1.0 * PX;
+    const vals = [];
+    for (let k = 0; k < S.n; k++) {
+      const cx = (S.x0 + k * S.step + S.size / 2) * PX, cy = (S.y + S.size / 2) * PX;
+      let s = 0, n = 0;
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) { s += ink(cx + dx, cy + dy); n++; }
+      vals.push(s / n);
+    }
+    const sorted = vals.slice().sort((a, b) => a - b);
+    const lo = sorted[0], hi = sorted[sorted.length - 1];
+    if (hi - lo < 60) return null;                                  // ไม่มีแถบ (กระดาษรุ่นเก่า)
+    const bits = vals.map(v => v > (lo + hi) / 2 ? 1 : 0);
+    const num = (a, b) => bits.slice(a, b).reduce((t, x) => t * 2 + x, 0);
+    const id = num(0, 24), lv = num(24, 27), chk = num(27, 32);
+    if (!(id > 0) || lv < 1 || lv > 6 || chk !== (id % 29 + lv * 3) % 32) return null;
+    return id + '|' + lv;
   }
 
   /** ลำดับมุมของกระดาษเทียบกับมุมของภาพ ตามการหมุน 0/90/180/270 องศา */
@@ -486,8 +524,18 @@ const OMR = (() => {
         if (txt) { H = Ht; qr = txt; rot = t; break outer; }
       }
     }
-    const page = warp(canvas, H, 0, 0, PAGE_W, PAGE_H, PX);
-    return Object.assign({ ok: true, qr: qr, rotated: rot }, readBubbles(page), { page: page });
+    let page = warp(canvas, H, 0, 0, PAGE_W, PAGE_H, PX);
+    let idSource = qr ? 'qr' : '';
+    if (!qr) {
+      // QR อ่านไม่ได้: ใช้แถบรหัสใต้ช่องลายมือชื่อ (ลองทุกทิศทางจนตัวตรวจถูก)
+      for (const t of tries) {
+        const Ht = t === rot ? H : solveH(G.markers, ROT[t].map(i => img[i]));
+        const pg = t === rot ? page : warp(canvas, Ht, 0, 0, PAGE_W, PAGE_H, PX);
+        const code = readStrip(pg);
+        if (code) { qr = code; H = Ht; page = pg; rot = t; idSource = 'strip'; break; }
+      }
+    }
+    return Object.assign({ ok: true, qr: qr, idSource: idSource, rotated: rot }, readBubbles(page), { page: page });
   }
 
   function readBubbles(page) {
@@ -609,14 +657,50 @@ function toast(msg, bad) {
   t.textContent = msg; t.className = 'toast show' + (bad ? ' error' : '');
   clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 2600);
 }
+/** แปลคำตอบที่ไม่ใช่ข้อมูล (หน้าเว็บ HTML) เป็นสาเหตุที่แก้ได้ */
+function diagnose(status, text) {
+  const t = String(text || '');
+  const title = (/<title>([^<]*)<\/title>/i.exec(t) || [])[1] || '';
+  if (/Script function not found: doPost|ไม่พบฟังก์ชันสคริปต์: doPost/i.test(t))
+    return 'ระบบยังไม่ได้ Deploy เวอร์ชันที่มีหน้าสแกน: ใน Apps Script กด Deploy > Manage deployments > ✏️ > Version: New version > Deploy';
+  if (/accounts\.google\.com|ServiceLogin|Sign in|ลงชื่อเข้าใช้/i.test(t))
+    return 'ลิงก์ระบบต้องให้ล็อกอิน Google: ตั้ง Who has access = Anyone (ทุกคน) ใน Manage deployments หรือใช้ลิงก์ที่ลงท้าย /exec ไม่ใช่ /dev';
+  if (/unable to open the file|ไม่สามารถเปิดไฟล์/i.test(t))
+    return 'Google เปิดสคริปต์ไม่ได้ชั่วคราว หรือลิงก์ระบบผิด ตรวจลิงก์แล้วลองใหม่';
+  if (status === 404) return 'ไม่พบลิงก์ระบบ (404) ลิงก์อาจผิดหรือ deployment ถูกลบ กด "เปลี่ยนลิงก์ระบบ" แล้ววางลิงก์ใหม่';
+  return 'ระบบตอบกลับเป็นหน้าเว็บแทนข้อมูล' + (title ? ' (' + title + ')' : '') + ' ตรวจการ Deploy และลิงก์ระบบ';
+}
 async function call(action, payload) {
-  const r = await fetch(API, {
-    method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(Object.assign({ action: action, token: TOKEN }, payload || {}))
-  });
-  const j = await r.json();
+  let r, text;
+  try {
+    r = await fetch(API, {
+      method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(Object.assign({ action: action, token: TOKEN }, payload || {}))
+    });
+    text = await r.text();
+  } catch (e) {
+    throw new Error('เชื่อมต่อระบบไม่ได้ ตรวจอินเทอร์เน็ตหรือลิงก์ระบบ');
+  }
+  let j;
+  try { j = JSON.parse(text); } catch (e) { throw new Error(diagnose(r.status, text)); }
   if (!j.ok && /SESSION_EXPIRED/.test(j.error || '')) { logout('หมดเวลาเข้าสู่ระบบ เข้าสู่ระบบใหม่อีกครั้ง'); throw new Error('หมดเวลาเข้าสู่ระบบ'); }
   return j;
+}
+/** ทดสอบการเชื่อมต่อ: เรียก ?page=ping แล้วลองส่งคำสั่งทดสอบ */
+async function testApi() {
+  const out = [];
+  const url = API + (API.indexOf('?') > -1 ? '&' : '?') + 'page=ping';
+  try {
+    const t = await (await fetch(url)).text();
+    let j = null; try { j = JSON.parse(t); } catch (e) {}
+    out.push(j && j.ok ? '✅ เปิดลิงก์ระบบได้ (Deploy เวอร์ชันล่าสุดแล้ว)' : '❌ ' + (j ? 'ตอบกลับผิดรูปแบบ' : diagnose(0, t) + ' (หรือยังเป็นเวอร์ชันเก่าที่ไม่มีตัวทดสอบ)'));
+  } catch (e) { out.push('❌ เปิดลิงก์ระบบไม่ได้: ' + e.message); }
+  try {
+    const j = await call('ping-test');
+    out.push(j && j.error === 'ไม่รู้จักคำสั่ง' ? '✅ ส่งข้อมูลเข้าระบบได้ (doPost ทำงาน)' : '⚠️ ตอบกลับ: ' + JSON.stringify(j).slice(0, 80));
+  } catch (e) { out.push('❌ ' + e.message); }
+  Dlg.alert({ icon: out.every(x => x[0] === '✅') ? 'success' : 'warning', title: 'ผลทดสอบการเชื่อมต่อ',
+    html: '<div class="dlg-grp">' + out.map(esc).join('<br><br>') + '</div><p class="dlg-note">ลิงก์ที่ใช้: ' + esc(API) + '</p>' });
 }
 
 // ================= เข้าสู่ระบบ =================
@@ -662,6 +746,7 @@ async function doLogin() {
   } finally { b.disabled = false; b.textContent = 'เข้าสู่ระบบและเปิดกล้อง'; }
 }
 $('btnChangeApi').addEventListener('click', () => { API = ''; try { localStorage.removeItem('scanApi'); } catch (e) {} setupApiBox(); });
+$('btnTestApi').addEventListener('click', testApi);
 
 // ================= กล้องสด =================
 let stream = null, track = null, running = false, torchOn = false;
@@ -679,7 +764,7 @@ async function startCam() {
   try {
     await OMR.loadLibs();
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 2560 }, height: { ideal: 1440 } }
     });
   } catch (e) {
     setBanner('❌ เปิดกล้องไม่ได้: ' + (e.message || e) + ' กดอนุญาตให้ใช้กล้องในเบราว์เซอร์', 'warn');
@@ -778,13 +863,27 @@ function beep(freq, ms, times) {
   if (navigator.vibrate) navigator.vibrate(times > 1 ? [80, 60, 80] : 90);
 }
 
+/** ภาพนิ่งความละเอียดสูงจากกล้อง (ชัดกว่าเฟรมวิดีโอ ช่วยให้อ่าน QR ได้) ถ้าเครื่องไม่รองรับใช้เฟรมวิดีโอ */
+async function stillCanvas() {
+  if (window.ImageCapture && track && track.readyState === 'live') {
+    try {
+      const blob = await new ImageCapture(track).takePhoto();
+      const bmp = await createImageBitmap(blob);
+      const c = OMR.toCanvas(bmp, 2600);
+      if (bmp.close) bmp.close();
+      return c;
+    } catch (e) { /* ใช้เฟรมวิดีโอแทน */ }
+  }
+  return frame(2000);
+}
+
 function capture(manual) {
   if (reading) return;
   reading = true;
   setBanner('📸 กำลังอ่าน…', 'hold');
-  setTimeout(() => {
+  setTimeout(async () => {
     let r;
-    try { r = OMR.readPage(frame(2000)); } catch (e) { r = { ok: false, error: e.message }; }
+    try { r = OMR.readPage(await stillCanvas()); } catch (e) { r = { ok: false, error: e.message }; }
     reading = false; stable = 0; seenSince = 0;
     if (!r.ok) { setBanner('⚠️ ' + r.error, 'warn'); if (manual) beep(330, 120, 2); return; }
     const m = /^(\d+)\|(\d)$/.exec(r.qr || '');
@@ -794,7 +893,7 @@ function capture(manual) {
     const it = { key: 'k' + Date.now(), id: id, qrLevel: m ? m[2] : '', page: r.page, raw: r, status: 'ready', error: '' };
     resolve(it);
     beep(it.status === 'ready' && !it.flags.length ? 880 : 660, 120, 1);
-    if (!CONFIRM && it.status === 'ready' && !it.flags.length) accept(it);   // โหมดอัตโนมัติ: แผ่นที่ชัดเจนบันทึกเลย
+    if (!CONFIRM && it.status === 'ready' && !it.flags.length) { fetchScore(it); accept(it); }   // โหมดอัตโนมัติ: แผ่นที่ชัดเจนบันทึกเลย
     else openResult(it);
   }, 30);
 }
@@ -818,8 +917,27 @@ function resolve(it) {
 // ---------------- หน้ายืนยันผลแต่ละแผ่น ----------------
 let CUR = null;
 const ACH = { '1': 'ก', '2': 'ข', '3': 'ค', '4': 'ง', '0': 'ว่าง' };
+function scoreHtml(it) {
+  if (it.scoreErr) return '⚠️ ' + esc(it.scoreErr);
+  if (!it.score) return '🎯 กำลังคิดคะแนน…';
+  return '🎯 <b>' + it.score.total + '</b> / ' + it.score.max + ' คะแนน<div class="rs-parts">' +
+    it.score.parts.map(p => esc(p.name) + ' ' + p.score + '/' + p.max).join(' · ') + '</div>';
+}
+/** ขอคะแนนจากระบบ (เฉลยอยู่ที่ระบบหลัก ไม่ส่งมาที่มือถือ) */
+async function fetchScore(it) {
+  if (it.status !== 'ready') return;
+  const ans = it.answers;
+  try {
+    const j = await call('grade', { id: it.id, answers: ans });
+    if (it.answers !== ans) return;
+    it.score = j.ok && !j.error ? j : null;
+    it.scoreErr = j.error || '';
+  } catch (e) { it.scoreErr = 'คิดคะแนนไม่ได้: ' + e.message; }
+  if (CUR === it && $('rsScore')) $('rsScore').innerHTML = scoreHtml(it);
+}
 function openResult(it) {
   CUR = it; reviewing = true; drawOverlay(null);
+  if (!it.score && !it.scoreErr) fetchScore(it);
   setBanner('⏸ ตรวจผลแล้วกดยืนยัน', 'hold');
   renderResult();
   $('resultView').classList.remove('hidden');
@@ -833,7 +951,9 @@ function renderResult() {
     '<div class="rs-name">' + esc(it.name) + '</div>' +
     '<div class="rs-sub">' + (it.id ? 'รหัส ' + esc(it.id) + ' · ' : '') + esc(it.level || '') + (it.room ? ' ห้องสอบ ' + esc(it.room) : '') + '</div>' +
     '<div class="rs-st st-' + (it.status === 'ready' && it.flags.length ? 'flag' : it.status) + '">' + esc(st) + '</div>' +
-    '<div class="rs-sub">ตอบ ' + (it.n - blank) + ' ข้อ · ว่าง ' + blank + ' ข้อ · วงเขียว = คำตอบที่อ่านได้ แถบส้ม = ข้อที่ต้องดู</div>' +
+    (it.status === 'ready' ? '<div class="rs-score" id="rsScore">' + scoreHtml(it) + '</div>' : '') +
+    '<div class="rs-sub">ตอบ ' + (it.n - blank) + ' ข้อ · ว่าง ' + blank + ' ข้อ · วงเขียว = คำตอบที่อ่านได้ แถบส้ม = ข้อที่ต้องดู' +
+    (it.raw && it.raw.idSource === 'strip' ? ' · อ่านรหัสจากแถบใต้ช่องลายมือชื่อ' : '') + '</div>' +
     (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" placeholder="รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div>' : '') +
     '<div id="rsGrid" class="hidden"></div>';
   $('rsOk').disabled = it.status !== 'ready';
@@ -841,7 +961,7 @@ function renderResult() {
   if ($('rsIdOk')) $('rsIdOk').addEventListener('click', () => {
     it.id = $('rsId').value.replace(/\D/g, ''); it.answers = undefined;
     if (ITEMS.some(x => x.id === it.id && x.status !== 'error')) { toast('รหัสนี้สแกนไปแล้ว', true); return; }
-    resolve(it); renderResult();
+    resolve(it); it.score = null; it.scoreErr = ''; renderResult(); fetchScore(it);
   });
 }
 function gridHtml(it) {
@@ -877,6 +997,9 @@ $('resultView').addEventListener('click', e => {
   stEl.textContent = CUR.flags.length ? '⚠️ ต้องดู ' + CUR.flags.length + ' ข้อ: ' + CUR.flags.join(', ') : '✅ แก้แล้ว ครบทุกข้อ';
   stEl.className = 'rs-st st-' + (CUR.flags.length ? 'flag' : 'ready');
   $('rsOk').textContent = CUR.flags.length ? '✅ ยืนยัน (ส่งไปตรวจทาน)' : '✅ ยืนยันบันทึก';
+  const it = CUR;
+  if ($('rsScore')) $('rsScore').innerHTML = '🎯 กำลังคิดคะแนนใหม่…';
+  clearTimeout(it._t); it._t = setTimeout(() => fetchScore(it), 500);
 });
 $('rsOk').addEventListener('click', () => { if (CUR && CUR.status === 'ready') { accept(CUR); closeResult(true); } });
 $('rsRetake').addEventListener('click', () => closeResult(false));
@@ -892,7 +1015,7 @@ function accept(it) {
   it.page = null; it.raw = null;          // คืนหน่วยความจำ
   ITEMS.unshift(it);
   locked = true;
-  setBanner('✅ ' + it.name + (it.flags.length ? ' (ส่งตรวจทาน ' + it.flags.length + ' ข้อ)' : '') + ' เปลี่ยนแผ่นถัดไป', 'done');
+  setBanner('✅ ' + it.name + (it.score ? ' ' + it.score.total + ' คะแนน' : '') + (it.flags.length ? ' (ส่งตรวจทาน ' + it.flags.length + ' ข้อ)' : '') + ' เปลี่ยนแผ่นถัดไป', 'done');
   showLast(it); updateCount(); upload();
 }
 $('btnShot').addEventListener('click', () => { if (!reviewing && running) capture(true); });
