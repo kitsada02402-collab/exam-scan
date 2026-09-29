@@ -40,6 +40,10 @@
   .who { font-size: .82rem; opacity: .8; margin-bottom: 6px; }
   .banner { padding: 12px 14px; border-radius: 14px; font-weight: 700; font-size: 1.05rem; background: #1E62C8e6; text-align: center; }
   .banner.hold { background: #C99A00e6; }
+  .banner { position: relative; overflow: hidden; }
+  .banner span { position: relative; z-index: 1; }
+  .banner .bar { position: absolute; left: 0; bottom: 0; height: 5px; background: #fff; opacity: .85; transition: width .15s linear; }
+  .mini-btn { margin-left: 6px; padding: 4px 10px; border: none; border-radius: 8px; background: var(--blue); color: #fff; font: inherit; font-size: .9rem; font-weight: 700; }
   .banner.done { background: #1E8E5Ae6; }
   .banner.warn { background: #C93C3Ce6; }
   .cam-bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px)); background: linear-gradient(#0000, #000c); }
@@ -588,7 +592,7 @@ const OMR = (() => {
     const markLevel = rowMax[Math.floor(rowMax.length * 0.8)];
     let rng = markLevel - base;
     if (rng < 0.25) rng = 0.6;                                               // แทบไม่มีการฝน ใช้เกณฑ์มาตรฐาน
-    const T = { mark: base + 0.5 * rng, second: base + 0.3 * rng, weak: base + 0.08 * rng, gap: 0.3 * rng, contrast: 0.1 };
+    const T = { mark: base + 0.35 * rng, second: base + 0.3 * rng, weak: base + 0.08 * rng, gap: 0.25 * rng, contrast: 0.1 };
 
     const answers = [], flags = [];
     fills.forEach((f, i) => {
@@ -596,7 +600,7 @@ const OMR = (() => {
       const a = f[order[0]], b = f[order[1]];
       let ans = '0', flag = false;
       if (b >= T.mark && a - b < T.gap) { ans = 'X'; flag = true; }                  // ฝนหลายคำตอบ
-      else if (a >= T.mark) { ans = String(order[0] + 1); flag = b >= T.second; }    // ชัดเจน (มีวงอื่นเข้มด้วย = รอยลบ ให้ตรวจ)
+      else if (a >= T.mark && a - b >= T.gap) { ans = String(order[0] + 1); flag = b >= T.second; }    // ชัดเจน (มีวงอื่นเข้มด้วย = รอยลบ ให้ตรวจ)
       else if (a - b >= T.contrast && a >= T.weak) { ans = String(order[0] + 1); flag = true; }  // ขีด/ติ๊ก/ฝนไม่เต็ม: นับให้ แต่ส่งตรวจทาน
       else { ans = '0'; flag = a - b >= 0.06 && a >= T.weak; }                        // ว่าง (มีรอยจางๆ = น่าสงสัย)
       answers.push(ans);
@@ -691,7 +695,7 @@ async function call(action, payload) {
     });
     text = await r.text();
   } catch (e) {
-    throw new Error('เชื่อมต่อระบบไม่ได้ ตรวจอินเทอร์เน็ตหรือลิงก์ระบบ');
+    throw new Error('เชื่อมต่อระบบไม่ได้ (' + (e && e.message || e) + ')');
   }
   let j;
   try { j = JSON.parse(text); } catch (e) { throw new Error(diagnose(r.status, text)); }
@@ -762,7 +766,8 @@ $('btnTestApi').addEventListener('click', testApi);
 
 // ================= กล้องสด =================
 let stream = null, track = null, running = false, torchOn = false, CAMRES = null;
-let prev = null, stable = 0, locked = false, reading = false, missCount = 0, seenSince = 0, reviewing = false;
+let prev = null, stable = 0, locked = false, reading = false, missCount = 0, seenSince = 0, reviewing = false, qrFails = 0;
+const QR_TRIES = 4;       // อ่าน QR ไม่ได้ ถ่ายซ้ำเองกี่ครั้งก่อนให้พิมพ์รหัส
 let CONFIRM = (() => { try { return localStorage.getItem('scanConfirm') !== '0'; } catch (e) { return true; } })();
 const video = $('video'), overlay = $('overlay');
 
@@ -825,7 +830,11 @@ function frame(maxSide) {
   c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
   return c;
 }
-function setBanner(txt, kind) { const b = $('banner'); b.textContent = txt; b.className = 'banner ' + (kind || ''); }
+function setBanner(txt, kind, pct) {
+  const b = $('banner');
+  b.className = 'banner ' + (kind || '');
+  b.innerHTML = '<span>' + esc(txt) + '</span>' + (pct != null ? '<i class="bar" style="width:' + Math.round(pct * 100) + '%"></i>' : '');
+}
 function drawOverlay(pts) {
   const r = video.getBoundingClientRect();
   overlay.width = r.width; overlay.height = r.height;
@@ -853,7 +862,7 @@ function tick() {
   const pts = OMR.detect(frame(640));
   if (!pts) {
     missCount++;
-    if (missCount > 3) { locked = false; stable = 0; prev = null; seenSince = 0; }   // เอากระดาษออกแล้ว พร้อมแผ่นถัดไป
+    if (missCount > 3) { locked = false; stable = 0; prev = null; seenSince = 0; qrFails = 0; }   // เอากระดาษออกแล้ว พร้อมแผ่นถัดไป
     drawOverlay(null);
     if (!locked) setBanner('📄 วางกระดาษให้เห็นสี่เหลี่ยมดำครบ 4 มุม (หรือกด 📸)', 'idle');
     return;
@@ -866,8 +875,9 @@ function tick() {
   drawOverlay(pts);
   if (locked) return;
   // ถ่ายเมื่อนิ่ง 2 จังหวะ หรือเห็นกระดาษต่อเนื่องเกิน 1.2 วินาที (มือสั่นเล็กน้อยก็ถ่ายได้)
-  if (stable >= 2 || (Date.now() - seenSince > 1200 && move < 0.05)) { capture(false); return; }
-  setBanner('✋ ถือนิ่งๆ สักครู่… (หรือกด 📸)', 'hold');
+  const held = Date.now() - seenSince;
+  if (stable >= 2 || (held > 1200 && move < 0.05)) { capture(false); return; }
+  setBanner(qrFails ? '🔍 อ่าน QR อีกครั้ง (' + (qrFails + 1) + '/' + QR_TRIES + ') ถือนิ่งๆ…' : '✋ ถือนิ่งๆ ระบบจะถ่ายให้เอง…', 'hold', Math.min(1, held / 1200));
 }
 
 let beepCtx = null;
@@ -908,7 +918,12 @@ function capture(manual) {
     reading = false; stable = 0; seenSince = 0;
     if (!r.ok) { setBanner('⚠️ ' + r.error, 'warn'); if (manual) beep(330, 120, 2); return; }
     const m = /^(\d+)\|(\d)$/.exec(r.qr || '');
-    if (!m && !manual) { setBanner('⚠️ อ่าน QR ไม่ได้ ขยับให้ใกล้ขึ้นหรือเพิ่มแสง (หรือกด 📸 แล้วพิมพ์รหัสเอง)', 'warn'); return; }
+    if (!m && !manual) {
+      qrFails++;
+      if (qrFails < QR_TRIES) { setBanner('🔍 อ่าน QR ไม่ได้ ถ่ายใหม่อัตโนมัติ (' + qrFails + '/' + QR_TRIES + ') ขยับให้ใกล้ขึ้นเล็กน้อย', 'warn'); return; }
+      // ลองครบแล้ว: เปิดหน้าให้พิมพ์รหัสนักเรียนเอง (คำตอบที่อ่านได้ยังใช้ได้)
+    }
+    qrFails = 0;
     const id = m ? m[1] : '';
     if (id && ITEMS.some(x => x.id === id && x.status !== 'error')) { locked = true; setBanner('🔁 รหัส ' + id + ' สแกนไปแล้ว เปลี่ยนแผ่นถัดไป', 'done'); beep(440, 90, 2); return; }
     const it = { key: 'k' + Date.now(), id: id, qrLevel: m ? m[2] : '', page: r.page, raw: r, status: 'ready', error: '' };
@@ -939,21 +954,25 @@ function resolve(it) {
 let CUR = null;
 const ACH = { '1': 'ก', '2': 'ข', '3': 'ค', '4': 'ง', '0': 'ว่าง' };
 function scoreHtml(it) {
-  if (it.scoreErr) return '⚠️ ' + esc(it.scoreErr);
+  if (it.scoreErr) return '⚠️ ' + esc(it.scoreErr) + ' <button class="mini-btn" onclick="CUR.scoreErr=\'\';this.parentNode.innerHTML=scoreHtml(CUR);fetchScore(CUR)">ลองใหม่</button>';
   if (!it.score) return '🎯 กำลังคิดคะแนน…';
   return '🎯 <b>' + it.score.total + '</b> / ' + it.score.max + ' คะแนน<div class="rs-parts">' +
     it.score.parts.map(p => esc(p.name) + ' ' + p.score + '/' + p.max).join(' · ') + '</div>';
 }
 /** ขอคะแนนจากระบบ (เฉลยอยู่ที่ระบบหลัก ไม่ส่งมาที่มือถือ) */
-async function fetchScore(it) {
+async function fetchScore(it, attempt) {
   if (it.status !== 'ready') return;
   const ans = it.answers;
+  attempt = attempt || 1;
   try {
     const j = await call('grade', { id: it.id, answers: ans });
     if (it.answers !== ans) return;
     it.score = j.ok && !j.error ? j : null;
     it.scoreErr = j.error || '';
-  } catch (e) { it.scoreErr = 'คิดคะแนนไม่ได้: ' + e.message; }
+  } catch (e) {
+    if (attempt < 3) { setTimeout(() => fetchScore(it, attempt + 1), 1500 * attempt); return; }   // เน็ตสะดุด ลองใหม่เอง
+    it.scoreErr = 'คิดคะแนนไม่ได้: ' + e.message;
+  }
   if (CUR === it && $('rsScore')) $('rsScore').innerHTML = scoreHtml(it);
 }
 function openResult(it) {
@@ -975,10 +994,19 @@ function renderResult() {
     (it.status === 'ready' ? '<div class="rs-score" id="rsScore">' + scoreHtml(it) + '</div>' : '') +
     '<div class="rs-sub">ตอบ ' + (it.n - blank) + ' ข้อ · ว่าง ' + blank + ' ข้อ · วงเขียว = คำตอบที่อ่านได้ แถบส้ม = ข้อที่ต้องดู' +
     (it.raw && it.raw.idSource === 'strip' ? ' · อ่านรหัสจากแถบใต้ช่องลายมือชื่อ' : '') + '</div>' +
-    (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" placeholder="รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div>' : '') +
+    (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" autocomplete="off" placeholder="พิมพ์รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div><div class="rs-sub" id="rsIdHint">พิมพ์รหัสตามที่เขียนบนกระดาษ</div>' : '') +
     '<div id="rsGrid" class="hidden"></div>';
   $('rsOk').disabled = it.status !== 'ready';
   $('rsOk').textContent = it.flags.length ? '✅ ยืนยัน (ส่งไปตรวจทาน)' : '✅ ยืนยันบันทึก';
+  if ($('rsId')) {
+    setTimeout(() => $('rsId').focus(), 150);
+    $('rsId').addEventListener('input', () => {
+      const v = $('rsId').value.replace(/\D/g, '');
+      const st = DATA.students.find(x => x.id === v);
+      $('rsIdHint').textContent = !v ? 'พิมพ์รหัสตามที่เขียนบนกระดาษ' : st ? '→ ' + st.name + ' (' + st.level + ' ห้องสอบ ' + st.room + ')' : 'ยังไม่พบรหัสนี้';
+    });
+    $('rsId').addEventListener('keydown', e => { if (e.key === 'Enter') $('rsIdOk').click(); });
+  }
   if ($('rsIdOk')) $('rsIdOk').addEventListener('click', () => {
     it.id = $('rsId').value.replace(/\D/g, ''); it.answers = undefined;
     if (ITEMS.some(x => x.id === it.id && x.status !== 'error')) { toast('รหัสนี้สแกนไปแล้ว', true); return; }
