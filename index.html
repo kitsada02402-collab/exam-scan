@@ -161,7 +161,6 @@
     <div id="last" class="last hidden"></div>
     <div class="cam-bar">
       <span class="count" id="count">💾 0</span>
-      <button id="btnQrFirst" class="mode"></button>
       <button id="btnMode" class="mode"></button>
       <button id="btnTorch" class="hidden" aria-label="ไฟฉาย">🔦</button>
     </div>
@@ -276,7 +275,10 @@ const OMR = (() => {
     qr: { x: 162, y: 18, size: 30 },
     colX: [16, 62, 108, 154], firstRowY: 92, rowPitch: 6.8, rowsPerCol: 25,
     bubbleX0: 16, bubblePitch: 7.2, bubbleD: 4.6,
-    strip: { x0: 25, y: 272.5, step: 5, size: 3, n: 32 }       // แถบรหัสสำรองใต้ช่องลายมือชื่อ
+    strip: { x0: 25, y: 272.5, step: 5, size: 3, n: 32 },      // (กระดาษรุ่นก่อน) แถบรหัสสำรองใต้ช่องลายมือชื่อ
+    orient: { x: 22, y: 11, w: 12, h: 3 },                     // แถบบอกทิศด้านบนซ้าย
+    idGrid: { cols: 6, x0: 157.5, pitch: 6.2, y0: 29.5, rowPitch: 4.2, d: 3.4 },    // ช่องฝนรหัสนักเรียน
+    absent: { x: 143.5, y: 56, d: 4.2 }                        // ช่องฝนขาดสอบ
   };
   const PX = 4;                      // ความละเอียดภาพที่ดัดแล้ว (พิกเซลต่อ มม.)
   const PAGE_W = 210, PAGE_H = 297;
@@ -529,6 +531,24 @@ const OMR = (() => {
   const ROT = { 0: [0, 1, 2, 3], 180: [3, 2, 1, 0], 90: [1, 3, 0, 2], 270: [2, 0, 3, 1] };
 
   // ---------------- อ่าน 1 หน้า ----------------
+  /** ความเข้มของแถบบอกทิศ เมื่อสมมติว่ากระดาษหมุนแบบ H (0 = ขาว, 1 = ดำ) */
+  function orientDark(G0, H) {
+    const at = (u, v) => {
+      const [x, y] = apply(H, u, v);
+      const ix = Math.min(G0.w - 1, Math.max(0, Math.round(x))), iy = Math.min(G0.h - 1, Math.max(0, Math.round(y)));
+      return G0.g[iy * G0.w + ix];
+    };
+    const O = G.orient;
+    let bar = 0, paper = 0, n = 0;
+    for (let i = 0; i < 5; i++) for (let j = 0; j < 3; j++) {
+      bar += at(O.x + 1.5 + i * 2.2, O.y + 0.6 + j * 0.9);
+      paper += at(O.x + O.w + 5 + i * 2.2, O.y + 0.6 + j * 0.9);
+      n++;
+    }
+    bar /= n; paper /= n;
+    return paper > 0 ? (paper - bar) / paper : 0;
+  }
+
   function readPage(canvas) {
     const G0 = gray(canvas);
     const S = downscale(G0, 900);
@@ -536,31 +556,51 @@ const OMR = (() => {
     if (!pts) return { ok: false, error: 'หาสี่เหลี่ยมดำไม่ครบ 4 มุม ถ่ายใหม่ให้เห็นครบทุกมุม' };
     const img = pts.map(([x, y]) => [x / S.k, y / S.k]);
     const tries = canvas.width > canvas.height ? [90, 270, 0, 180] : [0, 180, 90, 270];
-    let H = null, qr = null, rot = tries[0];
-    // อ่าน QR ที่ความละเอียดหลายระดับ (รูปเบลอ/ไกล อ่านได้ดีขึ้น)
-    outer: for (const scale of [8, 12, 6]) {
-      for (const t of tries) {
-        const Ht = solveH(G.markers, ROT[t].map(i => img[i]));
-        const txt = readQR(warp(canvas, Ht, G.qr.x, G.qr.y, G.qr.size, G.qr.size, scale, true));
-        if (!H) { H = Ht; rot = t; }
-        if (txt) { H = Ht; qr = txt; rot = t; break outer; }
+    let H = null, qr = null, rot = tries[0], newSheet = false, src = '';
+
+    // 1) กระดาษรุ่นใหม่: ดูแถบบอกทิศด้านบนซ้าย (เร็ว ไม่ต้องอ่าน QR)
+    let best = null;
+    tries.forEach(t => {
+      const Ht = solveH(G.markers, ROT[t].map(i => img[i]));
+      const dk = orientDark(G0, Ht);
+      if (!best || dk > best.dk) best = { t: t, H: Ht, dk: dk };
+    });
+    if (best && best.dk > 0.4) { H = best.H; rot = best.t; newSheet = true; }
+
+    // 2) กระดาษรุ่นก่อน: ใช้ QR หาทิศ (อ่านหลายความละเอียด)
+    if (!H) {
+      outer: for (const scale of [8, 12, 6]) {
+        for (const t of tries) {
+          const Ht = solveH(G.markers, ROT[t].map(i => img[i]));
+          const txt = readQR(warp(canvas, Ht, G.qr.x, G.qr.y, G.qr.size, G.qr.size, scale, true));
+          if (!H) { H = Ht; rot = t; }
+          if (txt) { H = Ht; qr = txt; rot = t; src = 'qr'; break outer; }
+        }
       }
     }
     let page = warp(canvas, H, 0, 0, PAGE_W, PAGE_H, PX);
-    let idSource = qr ? 'qr' : '';
-    if (!qr) {
-      // QR อ่านไม่ได้: ใช้แถบรหัสใต้ช่องลายมือชื่อ (ลองทุกทิศทางจนตัวตรวจถูก)
-      for (const t of tries) {
-        const Ht = t === rot ? H : solveH(G.markers, ROT[t].map(i => img[i]));
-        const pg = t === rot ? page : warp(canvas, Ht, 0, 0, PAGE_W, PAGE_H, PX);
-        const code = readStrip(pg);
-        if (code) { qr = code; H = Ht; page = pg; rot = t; idSource = 'strip'; break; }
+    const bub = readBubbles(page, newSheet);
+
+    // รหัสนักเรียน: ช่องฝนรหัส (รุ่นใหม่) > QR > แถบรหัส (รุ่นก่อน)
+    let studentId = '', levelDigit = '', idSource = '';
+    if (newSheet && bub.grid.ok) { studentId = bub.grid.id; idSource = 'grid'; }
+    else {
+      if (!qr && !newSheet) {
+        for (const t of tries) {
+          const Ht = t === rot ? H : solveH(G.markers, ROT[t].map(i => img[i]));
+          const pg = t === rot ? page : warp(canvas, Ht, 0, 0, PAGE_W, PAGE_H, PX);
+          const code = readStrip(pg);
+          if (code) { qr = code; H = Ht; page = pg; rot = t; src = 'strip'; break; }
+        }
       }
+      const m = /^(\d+)\|(\d)$/.exec(qr || '');
+      if (m) { studentId = m[1]; levelDigit = m[2]; idSource = src; }
     }
-    return Object.assign({ ok: true, qr: qr, idSource: idSource, rotated: rot }, readBubbles(page), { page: page });
+    return Object.assign({ ok: true, qr: qr, studentId: studentId, levelDigit: levelDigit, idSource: idSource,
+      idGuess: newSheet ? bub.grid.guess : '', absent: newSheet && bub.absent, newSheet: newSheet, rotated: rot }, bub, { page: page });
   }
 
-  function readBubbles(page) {
+  function readBubbles(page, newSheet) {
     const W = page.width, Hh = page.height;
     const d = page.getContext('2d').getImageData(0, 0, W, Hh).data;
     // วัด "หมึก" จากช่องสีที่มืดที่สุด: จับได้ทั้งดินสอ (เทา) ปากกาน้ำเงิน ปากกาดำ และปากกาแดง
@@ -571,11 +611,12 @@ const OMR = (() => {
     const paper = samp[Math.floor(samp.length * 0.1)];                       // กระดาษเปล่า
     const black = G.markers.map(([u, v]) => ink(u * PX, v * PX)).reduce((a, b) => a + b, 0) / 4;
     const span = Math.max(40, black - paper);
-    const rIn = 1.45 * PX;
+    const rIn0 = 1.45 * PX;
     const darkCut = paper + 0.45 * span;
     // ค่าการฝน = มากกว่าระหว่าง (ความเข้มเฉลี่ย) กับ (สัดส่วนพิกเซลที่มีหมึกชัด)
     // สัดส่วนพิกเซลช่วยจับปากกาที่ขีดไม่เต็มวง ซึ่งเส้นเข้มแต่ครอบคลุมพื้นที่น้อย
-    const fillAt = (u, v) => {
+    const fillAt = (u, v, rr) => {
+      const rIn = rr || rIn0;
       let s = 0, n = 0, dk = 0;
       for (let dy = -rIn; dy <= rIn; dy++) for (let dx = -rIn; dx <= rIn; dx++) {
         if (dx * dx + dy * dy > rIn * rIn) continue;
@@ -612,7 +653,25 @@ const OMR = (() => {
       answers.push(ans);
       if (flag) flags.push(i + 1);
     });
-    return { answers: answers.join(''), fills: fills, flags: flags, white: paper, black: black, th: T };
+    // ช่องฝนรหัสนักเรียน (6 หลัก) + ช่องขาดสอบ
+    let grid = { ok: false, id: '', guess: '' }, absent = false;
+    if (newSheet) {
+      const GR = G.idGrid, ds = [];
+      for (let c = 0; c < GR.cols; c++) {
+        const f = [];
+        for (let d = 0; d <= 9; d++) f.push(fillAt(GR.x0 + c * GR.pitch, GR.y0 + d * GR.rowPitch, 1.1 * PX));
+        const o = f.map((v, i) => i).sort((x, y) => f[y] - f[x]);
+        const a = f[o[0]], b = f[o[1]];
+        ds.push(a < 0.3 ? '' : (a >= 0.45 && a - b >= 0.25) ? String(o[0]) : '?');
+      }
+      const first = ds.findIndex(d => d !== '');
+      const body = first < 0 ? [] : ds.slice(first);
+      const okCols = body.length && body.every(d => d !== '' && d !== '?');
+      const id = okCols ? String(Number(body.join(''))) : '';
+      grid = { ok: !!okCols && Number(id) > 0, id: id, guess: ds.map(d => d || '_').join('') };
+      absent = fillAt(G.absent.x, G.absent.y, 1.4 * PX) >= 0.45;
+    }
+    return { answers: answers.join(''), fills: fills, flags: flags, white: paper, black: black, th: T, grid: grid, absent: absent };
   }
 
   /** ภาพพรีวิว: ทำเครื่องหมายคำตอบที่อ่านได้ (เขียว) และข้อที่ต้องตรวจ (ส้ม) */
@@ -783,7 +842,7 @@ let stream = null, track = null, running = false, torchOn = false, CAMRES = null
 let prev = null, stable = 0, locked = false, reading = false, missCount = 0, seenSince = 0, reviewing = false, qrFails = 0;
 const QR_TRIES = 4;       // อ่าน QR ไม่ได้ ถ่ายซ้ำเองกี่ครั้งก่อนให้พิมพ์รหัส
 let CONFIRM = (() => { try { return localStorage.getItem('scanConfirm') !== '0'; } catch (e) { return true; } })();
-let QRFIRST = (() => { try { return localStorage.getItem('scanQrFirst') === '1'; } catch (e) { return false; } })();
+let QRFIRST = false;      // กระดาษรุ่นใหม่ใช้ช่องฝนรหัสแทน QR ไม่ต้องส่อง QR ก่อน
 let qrMode = null;        // กำลังส่องอ่าน QR ใกล้ๆ { onFound(id, level) }
 let PENDING = null;       // โหมด QR ก่อน: รหัสที่อ่านได้แล้ว รอถ่ายทั้งแผ่น
 const video = $('video'), overlay = $('overlay');
@@ -992,7 +1051,8 @@ function capture(manual) {
     try { r = OMR.readPage(await stillCanvas()); } catch (e) { r = { ok: false, error: e.message }; }
     reading = false; stable = 0; seenSince = 0;
     if (!r.ok) { setBanner('⚠️ ' + r.error, 'warn'); if (manual) beep(330, 120, 2); return; }
-    let m = /^(\d+)\|(\d)$/.exec(r.qr || '');
+    // รหัสจากช่องฝนรหัส (กระดาษรุ่นใหม่) หรือ QR/แถบรหัส (รุ่นก่อน)
+    let m = r.studentId ? [null, r.studentId, r.levelDigit || ''] : null;
     let mismatch = '';
     if (PENDING) {
       if (m && m[1] !== PENDING.id) mismatch = 'QR บนแผ่นนี้เป็นรหัส ' + m[1] + ' แต่ที่ส่องก่อนหน้าเป็น ' + PENDING.id + ' ตรวจว่าเป็นแผ่นเดียวกัน';
@@ -1000,33 +1060,40 @@ function capture(manual) {
     }
     if (!m && !manual) {
       qrFails++;
-      if (qrFails < QR_TRIES) { setBanner('🔍 อ่าน QR ไม่ได้ ถ่ายใหม่อัตโนมัติ (' + qrFails + '/' + QR_TRIES + ') ขยับให้ใกล้ขึ้นเล็กน้อย', 'warn'); return; }
+      if (qrFails < QR_TRIES) { setBanner('🔍 อ่านรหัสนักเรียนไม่ได้ ถ่ายใหม่อัตโนมัติ (' + qrFails + '/' + QR_TRIES + ')', 'warn'); return; }
       // ลองครบแล้ว: เปิดหน้าให้พิมพ์รหัสนักเรียนเอง (คำตอบที่อ่านได้ยังใช้ได้)
     }
     qrFails = 0;
-    const id = m ? m[1] : '';
+    const found = m ? findStudent(m[1]) : null;
+    const id = m ? (found ? found.id : m[1]) : '';
     if (id && ITEMS.some(x => x.id === id && x.status !== 'error')) { locked = true; setBanner('🔁 รหัส ' + id + ' สแกนไปแล้ว เปลี่ยนแผ่นถัดไป', 'done'); beep(440, 90, 2); return; }
-    const it = { key: 'k' + Date.now(), id: id, qrLevel: m ? m[2] : '', page: r.page, raw: r, status: 'ready', error: '' };
+    const it = { key: 'k' + Date.now(), id: id, qrLevel: m ? m[2] : '', page: r.page, raw: r, status: 'ready', error: '', absent: !!r.absent, guess: r.idGuess || '' };
     resolve(it);
     if (mismatch) { it.status = 'error'; it.error = mismatch; }
     beep(it.status === 'ready' && !it.flags.length ? 880 : 660, 120, 1);
-    if (!CONFIRM && it.status === 'ready' && !it.flags.length) { fetchScore(it); accept(it); }   // โหมดอัตโนมัติ: แผ่นที่ชัดเจนบันทึกเลย
+    if (!CONFIRM && it.status === 'ready' && !it.flags.length && !it.absent) { accept(it); }   // โหมดอัตโนมัติ: แผ่นที่ชัดเจนบันทึกเลย
     else openResult(it);
   }, 30);
 }
 
 /** ผูกกระดาษกับนักเรียน ตัดจำนวนข้อ ทำภาพพรีวิว */
+function findStudent(id) {
+  if (!id) return null;
+  return DATA.students.find(s => s.id === String(id)) || DATA.students.find(s => Number(s.id) === Number(id)) || null;
+}
 function resolve(it) {
-  const st = it.id ? DATA.students.find(s => s.id === it.id) : null;
+  const st = findStudent(it.id);
+  if (st) it.id = st.id;
   const lv = st ? st.level : (it.qrLevel ? 'ม.' + it.qrLevel : '');
   const n = (lv && DATA.totals[lv]) || 100;
   it.level = lv; it.n = n;
-  it.name = st ? st.name : (it.id ? '(ไม่พบรหัสนี้)' : '(อ่าน QR ไม่ได้)');
+  it.name = st ? st.name : (it.id ? '(ไม่พบรหัสนี้)' : '(อ่านรหัสนักเรียนไม่ได้)');
   it.room = st ? st.room + ' ที่ ' + st.seat : '';
   if (it.answers === undefined) { it.answers = it.raw.answers.slice(0, n); it.flags = it.raw.flags.filter(q => q <= n); }
-  it.thumb = OMR.preview(it.page, it.answers, it.flags, n, 2.2, it.score && it.score.marks).toDataURL('image/jpeg', 0.65);
   it.status = 'ready'; it.error = '';
-  if (!it.id) { it.status = 'needid'; it.error = 'อ่าน QR ไม่ได้ พิมพ์รหัสนักเรียน'; }
+  gradeLocal(it);
+  it.thumb = OMR.preview(it.page, it.answers, it.flags, n, 2.2, it.score && it.score.marks).toDataURL('image/jpeg', 0.65);
+  if (!it.id) { it.status = 'needid'; it.error = 'อ่านรหัสนักเรียนไม่ได้' + (it.guess ? ' (อ่านได้ ' + it.guess + ')' : '') + ' พิมพ์รหัสเอง'; }
   else if (!st) { it.status = 'needid'; it.error = 'ไม่พบรหัส ' + it.id + ' ในรายชื่อที่มีที่นั่ง'; }
   else if (it.qrLevel && 'ม.' + it.qrLevel !== st.level) { it.status = 'error'; it.error = 'กระดาษของ ม.' + it.qrLevel + ' แต่นักเรียนสอบ ' + st.level; }
 }
@@ -1035,31 +1102,44 @@ function resolve(it) {
 let CUR = null;
 const ACH = { '1': 'ก', '2': 'ข', '3': 'ค', '4': 'ง', '0': 'ว่าง' };
 function scoreHtml(it) {
-  if (it.scoreErr) return '⚠️ ' + esc(it.scoreErr) + ' <button class="mini-btn" onclick="CUR.scoreErr=\'\';this.parentNode.innerHTML=scoreHtml(CUR);fetchScore(CUR)">ลองใหม่</button>';
+  if (it.absent) return '❌ <b>ขาดสอบ</b> (กรรมการฝนช่องขาดสอบ) บันทึกเป็นไม่เข้าสอบ คะแนน 0';
+  if (it.scoreErr) return '⚠️ ' + esc(it.scoreErr);
   if (!it.score) return '🎯 กำลังคิดคะแนน…';
   return '🎯 <b>' + it.score.total + '</b> / ' + it.score.max + ' คะแนน<div class="rs-parts">' +
     it.score.parts.map(p => esc(p.name) + ' ' + p.score + '/' + p.max).join(' · ') + '</div>';
 }
 /** ขอคะแนนจากระบบ (เฉลยอยู่ที่ระบบหลัก ไม่ส่งมาที่มือถือ) */
-async function fetchScore(it, attempt) {
-  if (it.status !== 'ready') return;
-  const ans = it.answers;
-  attempt = attempt || 1;
-  try {
-    const j = await call('grade', { id: it.id, answers: ans });
-    if (it.answers !== ans) return;
-    it.score = j.ok && !j.error ? j : null;
-    it.scoreErr = j.error || '';
-  } catch (e) {
-    if (attempt < 3) { setTimeout(() => fetchScore(it, attempt + 1), 1500 * attempt); return; }   // เน็ตสะดุด ลองใหม่เอง
-    it.scoreErr = 'คิดคะแนนไม่ได้: ' + e.message;
+/** คิดคะแนนในเครื่องจากเฉลยที่ได้ตอนเข้าสู่ระบบ (เร็ว ไม่ต้องรอเน็ต) บันทึกจริงระบบหลักตรวจซ้ำ */
+function gradeLocal(it) {
+  it.score = null; it.scoreErr = '';
+  if (!it.level) return;
+  const key = (DATA.keys || {})[it.level] || '';
+  const ranges = (DATA.ranges || {})[it.level] || [];
+  if (!/[1-4*]/.test(key)) { it.scoreErr = 'ยังไม่มีเฉลยของ ' + it.level; return; }
+  let marks = '', total = 0, max = 0;
+  const parts = ranges.map(r => {
+    let sc = 0;
+    for (let q = r.from; q <= r.to; q++) {
+      const k = key[q - 1] || '0', a = it.answers[q - 1] || '0';
+      if (k === '*' || (k !== '0' && a === k)) sc += r.points;
+    }
+    total += sc; max += r.max;
+    return { name: r.name, score: Math.round(sc * 100) / 100, max: r.max };
+  });
+  for (let q = 0; q < it.n; q++) {
+    const k = key[q] || '0', a = it.answers[q] || '0';
+    marks += k === '*' ? '*' : k === '0' ? '-' : (a === '0' ? 'b' : a === k ? '1' : '0');
   }
-  if (it.score && it.score.marks && it.page) {
-    it.thumb = OMR.preview(it.page, it.answers, it.flags, it.n, 2.2, it.score.marks).toDataURL('image/jpeg', 0.65);
-    if (CUR === it && $('rsBody').querySelector('.rs-img')) $('rsBody').querySelector('.rs-img').src = it.thumb;
+  it.score = { total: Math.round(total * 100) / 100, max: max, parts: parts, marks: marks };
+}
+function fetchScore(it) {      // ชื่อเดิม: คิดคะแนนใหม่หลังแก้คำตอบ
+  gradeLocal(it);
+  if (it.page) it.thumb = OMR.preview(it.page, it.answers, it.flags, it.n, 2.2, it.score && it.score.marks).toDataURL('image/jpeg', 0.65);
+  if (CUR === it) {
+    if ($('rsBody').querySelector('.rs-img')) $('rsBody').querySelector('.rs-img').src = it.thumb;
+    if ($('rsScore')) $('rsScore').innerHTML = scoreHtml(it);
+    updateGridMarks();
   }
-  if (CUR === it && $('rsScore')) $('rsScore').innerHTML = scoreHtml(it);
-  if (CUR === it) updateGridMarks();
 }
 function updateGridMarks() {
   const mk = CUR && CUR.score && CUR.score.marks;
@@ -1070,7 +1150,7 @@ function updateGridMarks() {
 }
 function openResult(it) {
   CUR = it; reviewing = true; drawOverlay(null);
-  if (!it.score && !it.scoreErr) fetchScore(it);
+
   setBanner('⏸ ตรวจผลแล้วกดยืนยัน', 'hold');
   renderResult();
   $('resultView').classList.remove('hidden');
@@ -1087,15 +1167,15 @@ function renderResult() {
     (it.status === 'ready' ? '<div class="rs-score" id="rsScore">' + scoreHtml(it) + '</div>' : '') +
     '<div class="rs-sub">ตอบ ' + (it.n - blank) + ' ข้อ · ว่าง ' + blank + ' ข้อ · วงเขียว = ถูก · วงแดง = ผิด · แถบเหลือง = ต้องตรวจทาน' +
     (it.raw && it.raw.idSource === 'strip' ? ' · อ่านรหัสจากแถบใต้ช่องลายมือชื่อ' : '') + '</div>' +
-    (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" autocomplete="off" placeholder="พิมพ์รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div><div class="rs-sub" id="rsIdHint">พิมพ์รหัสตามที่เขียนบนกระดาษ</div><button class="btn soft" id="rsQr">📷 หรือส่องอ่าน QR ใกล้ๆ</button>' : '') +
+    (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" autocomplete="off" placeholder="พิมพ์รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div><div class="rs-sub" id="rsIdHint">พิมพ์รหัสตามที่เขียนบนกระดาษ</div>' : '') +
     '<div id="rsGrid" class="hidden"></div>';
   $('rsOk').disabled = it.status !== 'ready';
-  $('rsOk').textContent = it.flags.length ? '✅ ยืนยัน (ส่งไปตรวจทาน)' : '✅ ยืนยันบันทึก';
+  $('rsOk').textContent = it.absent ? '✅ ยืนยันบันทึกขาดสอบ' : it.flags.length ? '✅ ยืนยัน (ส่งไปตรวจทาน)' : '✅ ยืนยันบันทึก';
   if ($('rsId')) {
     setTimeout(() => $('rsId').focus(), 150);
     $('rsId').addEventListener('input', () => {
       const v = $('rsId').value.replace(/\D/g, '');
-      const st = DATA.students.find(x => x.id === v);
+      const st = findStudent(v);
       $('rsIdHint').textContent = !v ? 'พิมพ์รหัสตามที่เขียนบนกระดาษ' : st ? '→ ' + st.name + ' (' + st.level + ' ห้องสอบ ' + st.room + ')' : 'ยังไม่พบรหัสนี้';
     });
     $('rsId').addEventListener('keydown', e => { if (e.key === 'Enter') $('rsIdOk').click(); });
@@ -1116,7 +1196,7 @@ function renderResult() {
   if ($('rsIdOk')) $('rsIdOk').addEventListener('click', () => {
     it.id = $('rsId').value.replace(/\D/g, ''); it.answers = undefined;
     if (ITEMS.some(x => x.id === it.id && x.status !== 'error')) { toast('รหัสนี้สแกนไปแล้ว', true); return; }
-    resolve(it); it.score = null; it.scoreErr = ''; renderResult(); fetchScore(it);
+    resolve(it); renderResult();
   });
 }
 function gridHtml(it) {
@@ -1171,7 +1251,7 @@ function accept(it) {
   it.page = null; it.raw = null;          // คืนหน่วยความจำ
   ITEMS.unshift(it);
   locked = true;
-  setBanner('✅ ' + it.name + (it.score ? ' ' + it.score.total + ' คะแนน' : '') + (it.flags.length ? ' (ส่งตรวจทาน ' + it.flags.length + ' ข้อ)' : '') + ' เปลี่ยนแผ่นถัดไป', 'done');
+  setBanner('✅ ' + it.name + (it.absent ? ' ขาดสอบ' : it.score ? ' ' + it.score.total + ' คะแนน' : '') + (it.flags.length && !it.absent ? ' (ส่งตรวจทาน ' + it.flags.length + ' ข้อ)' : '') + ' เปลี่ยนแผ่นถัดไป', 'done');
   showLast(it); updateCount(); upload();
   PENDING = null;
   if (QRFIRST) { locked = false; startQrFirst(); }
@@ -1181,10 +1261,9 @@ function saveModes() { try { localStorage.setItem('scanConfirm', CONFIRM ? '1' :
 function renderMode() {
   $('btnMode').textContent = CONFIRM ? '✋ ยืนยันทุกแผ่น' : '⚡ บันทึกอัตโนมัติ';
   $('btnMode').classList.toggle('on', !CONFIRM);
-  $('btnQrFirst').textContent = QRFIRST ? '🔢 QR ก่อน: เปิด' : '🔢 QR ก่อน';
-  $('btnQrFirst').classList.toggle('on', QRFIRST);
+
 }
-$('btnQrFirst').addEventListener('click', () => {
+if ($('btnQrFirst')) $('btnQrFirst').addEventListener('click', () => {
   QRFIRST = !QRFIRST; saveModes(); renderMode();
   if (!QRFIRST) { stopQrMode(); PENDING = null; }
   toast(QRFIRST ? 'ส่องอ่าน QR ใกล้ๆ ก่อน แล้วค่อยถ่ายทั้งแผ่น' : 'อ่าน QR จากภาพทั้งแผ่น (แบบเดิม)');
@@ -1224,7 +1303,7 @@ async function upload() {
   try {
     const j = await call('saveScan', {
       overwrite: ow,
-      items: batch.map(x => ({ key: x.key, id: x.id, level: x.qrLevel, answers: x.answers, flags: x.flags, image: x.image }))
+      items: batch.map(x => ({ key: x.key, id: x.id, level: x.qrLevel, answers: x.answers, flags: x.flags, image: x.image, absent: !!x.absent }))
     });
     if (!j.ok) throw new Error(j.error || 'บันทึกไม่สำเร็จ');
     (j.conflicts || []).forEach(c => { const x = ITEMS.find(i => i.key === c.key); if (x) { x.status = 'conflict'; x.error = c.reason; } });
