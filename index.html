@@ -147,7 +147,7 @@
 <div id="camView" class="cam hidden">
   <video id="video" playsinline muted autoplay></video>
   <canvas id="overlay"></canvas>
-  <div class="cam-top"><div class="who" id="who"></div><div id="banner" class="banner">กำลังเปิดกล้อง…</div></div>
+  <div class="cam-top"><div class="who"><span id="who"></span> <span id="camRes" style="opacity:.7"></span></div><div id="banner" class="banner">กำลังเปิดกล้อง…</div></div>
   <div class="cam-bottom">
     <div id="last" class="last hidden"></div>
     <div class="cam-bar">
@@ -443,7 +443,7 @@ const OMR = (() => {
   const apply = (H, u, v) => { const z = H[6] * u + H[7] * v + 1; return [(H[0] * u + H[1] * v + H[2]) / z, (H[3] * u + H[4] * v + H[5]) / z]; };
 
   /** ดัดภาพส่วน [x0,y0,w,h] มม. ให้ตรง ที่ความละเอียด px พิกเซล/มม. */
-  function warp(srcCanvas, H, x0, y0, wmm, hmm, px) {
+  function warp(srcCanvas, H, x0, y0, wmm, hmm, px, smooth) {
     const sw = srcCanvas.width, sh = srcCanvas.height;
     const sd = srcCanvas.getContext('2d').getImageData(0, 0, sw, sh).data;
     const W = Math.round(wmm * px), Hh = Math.round(hmm * px);
@@ -454,9 +454,21 @@ const OMR = (() => {
     for (let y = 0; y < Hh; y++) {
       for (let x = 0; x < W; x++) {
         const [sx, sy] = apply(H, x0 + (x + 0.5) / px, y0 + (y + 0.5) / px);
-        const ix = Math.min(sw - 1, Math.max(0, sx | 0)), iy = Math.min(sh - 1, Math.max(0, sy | 0));
-        const si = (iy * sw + ix) * 4, oi = (y * W + x) * 4;
-        od.data[oi] = sd[si]; od.data[oi + 1] = sd[si + 1]; od.data[oi + 2] = sd[si + 2]; od.data[oi + 3] = 255;
+        const oi = (y * W + x) * 4;
+        if (smooth) {        // เฉลี่ย 4 จุดรอบๆ (ภาพความละเอียดต่ำขยายแล้วไม่แตก ช่วยให้อ่าน QR ได้)
+          const fx = Math.min(sw - 2, Math.max(0, sx - 0.5)), fy = Math.min(sh - 2, Math.max(0, sy - 0.5));
+          const ix = fx | 0, iy = fy | 0, ax = fx - ix, ay = fy - iy;
+          for (let ch = 0; ch < 3; ch++) {
+            const p00 = sd[(iy * sw + ix) * 4 + ch], p10 = sd[(iy * sw + ix + 1) * 4 + ch];
+            const p01 = sd[((iy + 1) * sw + ix) * 4 + ch], p11 = sd[((iy + 1) * sw + ix + 1) * 4 + ch];
+            od.data[oi + ch] = (p00 * (1 - ax) + p10 * ax) * (1 - ay) + (p01 * (1 - ax) + p11 * ax) * ay;
+          }
+        } else {
+          const ix = Math.min(sw - 1, Math.max(0, sx | 0)), iy = Math.min(sh - 1, Math.max(0, sy | 0));
+          const si = (iy * sw + ix) * 4;
+          od.data[oi] = sd[si]; od.data[oi + 1] = sd[si + 1]; od.data[oi + 2] = sd[si + 2];
+        }
+        od.data[oi + 3] = 255;
       }
     }
     ctx.putImageData(od, 0, 0);
@@ -519,7 +531,7 @@ const OMR = (() => {
     outer: for (const scale of [8, 12, 6]) {
       for (const t of tries) {
         const Ht = solveH(G.markers, ROT[t].map(i => img[i]));
-        const txt = readQR(warp(canvas, Ht, G.qr.x, G.qr.y, G.qr.size, G.qr.size, scale));
+        const txt = readQR(warp(canvas, Ht, G.qr.x, G.qr.y, G.qr.size, G.qr.size, scale, true));
         if (!H) { H = Ht; rot = t; }
         if (txt) { H = Ht; qr = txt; rot = t; break outer; }
       }
@@ -690,15 +702,15 @@ async function call(action, payload) {
 async function testApi() {
   const out = [];
   const url = API + (API.indexOf('?') > -1 ? '&' : '?') + 'page=ping';
-  try {
-    const t = await (await fetch(url)).text();
-    let j = null; try { j = JSON.parse(t); } catch (e) {}
-    out.push(j && j.ok ? '✅ เปิดลิงก์ระบบได้ (Deploy เวอร์ชันล่าสุดแล้ว)' : '❌ ' + (j ? 'ตอบกลับผิดรูปแบบ' : diagnose(0, t) + ' (หรือยังเป็นเวอร์ชันเก่าที่ไม่มีตัวทดสอบ)'));
-  } catch (e) { out.push('❌ เปิดลิงก์ระบบไม่ได้: ' + e.message); }
+  const NEED = 3;       // เวอร์ชันของ Code.gs ที่หน้าสแกนนี้ต้องใช้ (มีคิดคะแนนก่อนบันทึก)
   try {
     const j = await call('ping-test');
-    out.push(j && j.error === 'ไม่รู้จักคำสั่ง' ? '✅ ส่งข้อมูลเข้าระบบได้ (doPost ทำงาน)' : '⚠️ ตอบกลับ: ' + JSON.stringify(j).slice(0, 80));
+    if (j && j.version >= NEED) out.push('✅ เชื่อมต่อระบบได้ และ Code.gs เป็นเวอร์ชันล่าสุด (v' + j.version + ')');
+    else if (j && j.error === 'ไม่รู้จักคำสั่ง') out.push('⚠️ เชื่อมต่อได้ แต่ Code.gs ยังเป็นเวอร์ชันเก่า: สแกนได้แต่จะไม่เห็นคะแนน ให้แทนที่ Code.gs ทั้งไฟล์ แล้ว Deploy > Manage deployments > ✏️ > New version');
+    else out.push('⚠️ ตอบกลับ: ' + JSON.stringify(j).slice(0, 80));
   } catch (e) { out.push('❌ ' + e.message); }
+  const cam = CAMRES ? CAMRES.w + '×' + CAMRES.h : 'ยังไม่ได้เปิดกล้อง';
+  out.push((CAMRES && Math.max(CAMRES.w, CAMRES.h) < 1280 ? '⚠️' : 'ℹ️') + ' ความละเอียดกล้องล่าสุด: ' + cam);
   Dlg.alert({ icon: out.every(x => x[0] === '✅') ? 'success' : 'warning', title: 'ผลทดสอบการเชื่อมต่อ',
     html: '<div class="dlg-grp">' + out.map(esc).join('<br><br>') + '</div><p class="dlg-note">ลิงก์ที่ใช้: ' + esc(API) + '</p>' });
 }
@@ -749,7 +761,7 @@ $('btnChangeApi').addEventListener('click', () => { API = ''; try { localStorage
 $('btnTestApi').addEventListener('click', testApi);
 
 // ================= กล้องสด =================
-let stream = null, track = null, running = false, torchOn = false;
+let stream = null, track = null, running = false, torchOn = false, CAMRES = null;
 let prev = null, stable = 0, locked = false, reading = false, missCount = 0, seenSince = 0, reviewing = false;
 let CONFIRM = (() => { try { return localStorage.getItem('scanConfirm') !== '0'; } catch (e) { return true; } })();
 const video = $('video'), overlay = $('overlay');
@@ -773,6 +785,15 @@ async function startCam() {
   video.srcObject = stream;
   await video.play();
   track = stream.getVideoTracks()[0];
+  CAMRES = { w: video.videoWidth, h: video.videoHeight };
+  $('camRes').textContent = '📷 ' + CAMRES.w + '×' + CAMRES.h;
+  // แอป Messenger/LINE มักให้กล้องความละเอียดต่ำ อ่าน QR ไม่ได้
+  if (Math.max(CAMRES.w, CAMRES.h) < 1280) {
+    Dlg.alert({ icon: 'warning', title: 'กล้องความละเอียดต่ำ',
+      html: '<p class="dlg-note">เบราว์เซอร์นี้ให้กล้องแค่ ' + CAMRES.w + '×' + CAMRES.h + ' อ่าน QR ได้ยาก' +
+        (/FBAN|FBAV|Messenger|Line\//i.test(navigator.userAgent) ? ' (กำลังเปิดในแอป Messenger/LINE)' : '') +
+        '<br><br>แนะนำ: กด ⋯ มุมขวาบน > <b>เปิดใน Chrome</b></p>' });
+  }
   const cap = track.getCapabilities ? track.getCapabilities() : {};
   $('btnTorch').classList.toggle('hidden', !cap.torch);
   running = true; prev = null; stable = 0;
