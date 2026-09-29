@@ -82,6 +82,10 @@
   .gq button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
   .gq button[data-c="0"].on { background: #6E7881; border-color: #6E7881; }
   .gq.flag { background: #FFF1DC; border-radius: 10px; box-shadow: 0 0 0 2px #F5C27A; }
+  .gq { grid-template-columns: 30px repeat(4, 1fr) 1.2fr 26px !important; }
+  .gq .gm { font-style: normal; text-align: center; }
+  .qr-cancel { margin-top: 8px; padding: 8px 14px; border: none; border-radius: 10px; background: #ffffff33; color: #fff; font: inherit; font-weight: 700; }
+  .cam-bar .mode { font-size: .82rem; padding: 0 10px; }
   .gq em { grid-column: 2 / -1; font-size: .78rem; color: var(--bad); font-style: normal; font-weight: 700; }
 
   /* รายการ */
@@ -151,11 +155,13 @@
 <div id="camView" class="cam hidden">
   <video id="video" playsinline muted autoplay></video>
   <canvas id="overlay"></canvas>
-  <div class="cam-top"><div class="who"><span id="who"></span> <span id="camRes" style="opacity:.7"></span></div><div id="banner" class="banner">กำลังเปิดกล้อง…</div></div>
+  <div class="cam-top"><div class="who"><span id="who"></span> <span id="camRes" style="opacity:.7"></span></div><div id="banner" class="banner">กำลังเปิดกล้อง…</div>
+    <button id="btnQrCancel" class="qr-cancel hidden">ยกเลิกส่อง QR</button></div>
   <div class="cam-bottom">
     <div id="last" class="last hidden"></div>
     <div class="cam-bar">
       <span class="count" id="count">💾 0</span>
+      <button id="btnQrFirst" class="mode"></button>
       <button id="btnMode" class="mode"></button>
       <button id="btnTorch" class="hidden" aria-label="ไฟฉาย">🔦</button>
     </div>
@@ -610,27 +616,35 @@ const OMR = (() => {
   }
 
   /** ภาพพรีวิว: ทำเครื่องหมายคำตอบที่อ่านได้ (เขียว) และข้อที่ต้องตรวจ (ส้ม) */
-  function preview(page, answers, flags, total, scale) {
+  /**
+   * ภาพพรีวิว: marks (ถ้ามี) = ผลตรวจจากระบบ '1' ถูก '0' ผิด 'b' ว่าง '*' ให้ทุกคน '-' ไม่คิด
+   * สีเขียว = ถูก, สีแดง = ผิด, สีเหลือง/ส้ม = ต้องตรวจทาน (ถ้ายังไม่มีผลตรวจ วงสีฟ้า = คำตอบที่อ่านได้)
+   */
+  function preview(page, answers, flags, total, scale, marks) {
     const k = (scale || 3) / PX;
     const c = document.createElement('canvas');
     c.width = Math.round(page.width * k); c.height = Math.round(page.height * k);
     const ctx = c.getContext('2d');
     ctx.drawImage(page, 0, 0, c.width, c.height);
     const s = (scale || 3);
-    ctx.lineWidth = Math.max(1.5, s * 0.5);
+    ctx.lineWidth = Math.max(2, s * 0.6);
     for (let q = 1; q <= (total || 100); q++) {
       const col = Math.floor((q - 1) / G.rowsPerCol), row = (q - 1) % G.rowsPerCol;
       const v = G.firstRowY + row * G.rowPitch;
       const a = answers[q - 1];
       const flagged = flags.indexOf(q) > -1;
+      const m = marks ? marks[q - 1] : '';
+      if (flagged) {
+        ctx.fillStyle = 'rgba(255,193,7,.28)';
+        ctx.fillRect((G.colX[col] - 1) * s, (v - G.rowPitch / 2) * s, 44 * s, G.rowPitch * s);
+      } else if (m === '0' || (m === 'b' && marks)) {
+        ctx.fillStyle = 'rgba(220,53,69,.10)';
+        ctx.fillRect((G.colX[col] - 1) * s, (v - G.rowPitch / 2) * s, 44 * s, G.rowPitch * s);
+      }
       if (a >= '1' && a <= '4') {
         const u = G.colX[col] + G.bubbleX0 + (Number(a) - 1) * G.bubblePitch;
-        ctx.strokeStyle = flagged ? '#F08C00' : '#12A150';
+        ctx.strokeStyle = flagged ? '#E69500' : m === '1' || m === '*' ? '#12A150' : m === '0' ? '#D62839' : '#1E62C8';
         ctx.beginPath(); ctx.arc(u * s, v * s, G.bubbleD * 0.75 * s, 0, Math.PI * 2); ctx.stroke();
-      }
-      if (flagged) {
-        ctx.fillStyle = 'rgba(240,140,0,.18)';
-        ctx.fillRect((G.colX[col] - 1) * s, (v - G.rowPitch / 2) * s, 44 * s, G.rowPitch * s);
       }
     }
     return c;
@@ -652,7 +666,7 @@ const OMR = (() => {
     return pts ? pts.map(([x, y]) => [x / S.w, y / S.h]) : null;
   }
 
-  return { G: G, loadLibs: loadLibs, pagesFromFile: pagesFromFile, readPage: readPage, preview: preview, toCanvas: toCanvas, jpeg: jpeg, detect: detect };
+  return { G: G, loadLibs: loadLibs, pagesFromFile: pagesFromFile, readPage: readPage, preview: preview, toCanvas: toCanvas, jpeg: jpeg, detect: detect, readQR: readQR };
 })();
 </script>
 <script>/* =====================================================================
@@ -769,6 +783,9 @@ let stream = null, track = null, running = false, torchOn = false, CAMRES = null
 let prev = null, stable = 0, locked = false, reading = false, missCount = 0, seenSince = 0, reviewing = false, qrFails = 0;
 const QR_TRIES = 4;       // อ่าน QR ไม่ได้ ถ่ายซ้ำเองกี่ครั้งก่อนให้พิมพ์รหัส
 let CONFIRM = (() => { try { return localStorage.getItem('scanConfirm') !== '0'; } catch (e) { return true; } })();
+let QRFIRST = (() => { try { return localStorage.getItem('scanQrFirst') === '1'; } catch (e) { return false; } })();
+let qrMode = null;        // กำลังส่องอ่าน QR ใกล้ๆ { onFound(id, level) }
+let PENDING = null;       // โหมด QR ก่อน: รหัสที่อ่านได้แล้ว รอถ่ายทั้งแผ่น
 const video = $('video'), overlay = $('overlay');
 
 function enterCam() {
@@ -859,6 +876,8 @@ function loop() {
 }
 function tick() {
   if (reading || reviewing || !video.videoWidth) return;
+  if (qrMode) { qrTick(); return; }
+  if (QRFIRST && !PENDING && !locked) { startQrFirst(); return; }
   const pts = OMR.detect(frame(640));
   if (!pts) {
     missCount++;
@@ -878,6 +897,62 @@ function tick() {
   const held = Date.now() - seenSince;
   if (stable >= 2 || (held > 1200 && move < 0.05)) { capture(false); return; }
   setBanner(qrFails ? '🔍 อ่าน QR อีกครั้ง (' + (qrFails + 1) + '/' + QR_TRIES + ') ถือนิ่งๆ…' : '✋ ถือนิ่งๆ ระบบจะถ่ายให้เอง…', 'hold', Math.min(1, held / 1200));
+}
+
+// ================= ส่องอ่าน QR ใกล้ๆ =================
+function qrTick() {
+  drawQrGuide();
+  const c = frame(1100);
+  let txt = OMR.readQR(c);
+  if (!txt) {        // ลองเฉพาะกลางภาพ ขยายให้ใหญ่ขึ้น
+    const w = c.width, h = c.height, k = document.createElement('canvas');
+    k.width = Math.round(w * 0.6); k.height = Math.round(h * 0.6);
+    k.getContext('2d').drawImage(c, w * 0.2, h * 0.2, w * 0.6, h * 0.6, 0, 0, k.width, k.height);
+    txt = OMR.readQR(k);
+  }
+  const m = /^(\d+)\|(\d)$/.exec(txt || '');
+  if (!m) return;
+  beep(1046, 90, 1);
+  const cb = qrMode.onFound;
+  stopQrMode();
+  cb(m[1], m[2]);
+}
+function drawQrGuide() {
+  const r = video.getBoundingClientRect();
+  overlay.width = r.width; overlay.height = r.height;
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0, 0, r.width, r.height);
+  const s = Math.min(r.width, r.height) * 0.55, x = (r.width - s) / 2, y = (r.height - s) / 2;
+  ctx.strokeStyle = '#FFD43B'; ctx.lineWidth = 5; ctx.setLineDash([18, 12]);
+  ctx.strokeRect(x, y, s, s); ctx.setLineDash([]);
+}
+function startQrMode(opts, text) {
+  qrMode = opts;
+  setBanner(text || '🔍 ส่องกล้องใกล้ๆ ที่ QR มุมขวาบนของกระดาษ ให้อยู่ในกรอบเหลือง', 'hold');
+  $('btnQrCancel').classList.remove('hidden');
+}
+function stopQrMode() {
+  qrMode = null;
+  $('btnQrCancel').classList.add('hidden');
+  drawOverlay(null);
+}
+$('btnQrCancel').addEventListener('click', () => {
+  const back = qrMode && qrMode.onCancel;
+  stopQrMode();
+  if (back) back();
+});
+/** โหมด QR ก่อน: อ่าน QR ใกล้ๆ ก่อน แล้วค่อยถอยกล้องถ่ายทั้งแผ่น */
+function startQrFirst() {
+  startQrMode({
+    onFound: (id, lv) => {
+      if (ITEMS.some(x => x.id === id && x.status !== 'error')) { beep(440, 90, 2); toast('รหัส ' + id + ' สแกนไปแล้ว', true); startQrFirst(); return; }
+      const st = DATA.students.find(x => x.id === id);
+      PENDING = { id: id, level: lv };
+      locked = false; stable = 0; seenSince = 0;
+      setBanner('✅ ' + (st ? st.name : 'รหัส ' + id) + ' · ถอยกล้องให้เห็นทั้งแผ่น', 'done');
+    },
+    onCancel: () => { QRFIRST = false; saveModes(); renderMode(); }
+  }, '① ส่องกล้องใกล้ๆ ที่ QR มุมขวาบนก่อน (โหมด QR ก่อน)');
 }
 
 let beepCtx = null;
@@ -917,7 +992,12 @@ function capture(manual) {
     try { r = OMR.readPage(await stillCanvas()); } catch (e) { r = { ok: false, error: e.message }; }
     reading = false; stable = 0; seenSince = 0;
     if (!r.ok) { setBanner('⚠️ ' + r.error, 'warn'); if (manual) beep(330, 120, 2); return; }
-    const m = /^(\d+)\|(\d)$/.exec(r.qr || '');
+    let m = /^(\d+)\|(\d)$/.exec(r.qr || '');
+    let mismatch = '';
+    if (PENDING) {
+      if (m && m[1] !== PENDING.id) mismatch = 'QR บนแผ่นนี้เป็นรหัส ' + m[1] + ' แต่ที่ส่องก่อนหน้าเป็น ' + PENDING.id + ' ตรวจว่าเป็นแผ่นเดียวกัน';
+      m = [null, PENDING.id, PENDING.level];
+    }
     if (!m && !manual) {
       qrFails++;
       if (qrFails < QR_TRIES) { setBanner('🔍 อ่าน QR ไม่ได้ ถ่ายใหม่อัตโนมัติ (' + qrFails + '/' + QR_TRIES + ') ขยับให้ใกล้ขึ้นเล็กน้อย', 'warn'); return; }
@@ -928,6 +1008,7 @@ function capture(manual) {
     if (id && ITEMS.some(x => x.id === id && x.status !== 'error')) { locked = true; setBanner('🔁 รหัส ' + id + ' สแกนไปแล้ว เปลี่ยนแผ่นถัดไป', 'done'); beep(440, 90, 2); return; }
     const it = { key: 'k' + Date.now(), id: id, qrLevel: m ? m[2] : '', page: r.page, raw: r, status: 'ready', error: '' };
     resolve(it);
+    if (mismatch) { it.status = 'error'; it.error = mismatch; }
     beep(it.status === 'ready' && !it.flags.length ? 880 : 660, 120, 1);
     if (!CONFIRM && it.status === 'ready' && !it.flags.length) { fetchScore(it); accept(it); }   // โหมดอัตโนมัติ: แผ่นที่ชัดเจนบันทึกเลย
     else openResult(it);
@@ -943,7 +1024,7 @@ function resolve(it) {
   it.name = st ? st.name : (it.id ? '(ไม่พบรหัสนี้)' : '(อ่าน QR ไม่ได้)');
   it.room = st ? st.room + ' ที่ ' + st.seat : '';
   if (it.answers === undefined) { it.answers = it.raw.answers.slice(0, n); it.flags = it.raw.flags.filter(q => q <= n); }
-  it.thumb = OMR.preview(it.page, it.answers, it.flags, n, 2.2).toDataURL('image/jpeg', 0.65);
+  it.thumb = OMR.preview(it.page, it.answers, it.flags, n, 2.2, it.score && it.score.marks).toDataURL('image/jpeg', 0.65);
   it.status = 'ready'; it.error = '';
   if (!it.id) { it.status = 'needid'; it.error = 'อ่าน QR ไม่ได้ พิมพ์รหัสนักเรียน'; }
   else if (!st) { it.status = 'needid'; it.error = 'ไม่พบรหัส ' + it.id + ' ในรายชื่อที่มีที่นั่ง'; }
@@ -973,7 +1054,19 @@ async function fetchScore(it, attempt) {
     if (attempt < 3) { setTimeout(() => fetchScore(it, attempt + 1), 1500 * attempt); return; }   // เน็ตสะดุด ลองใหม่เอง
     it.scoreErr = 'คิดคะแนนไม่ได้: ' + e.message;
   }
+  if (it.score && it.score.marks && it.page) {
+    it.thumb = OMR.preview(it.page, it.answers, it.flags, it.n, 2.2, it.score.marks).toDataURL('image/jpeg', 0.65);
+    if (CUR === it && $('rsBody').querySelector('.rs-img')) $('rsBody').querySelector('.rs-img').src = it.thumb;
+  }
   if (CUR === it && $('rsScore')) $('rsScore').innerHTML = scoreHtml(it);
+  if (CUR === it) updateGridMarks();
+}
+function updateGridMarks() {
+  const mk = CUR && CUR.score && CUR.score.marks;
+  document.querySelectorAll('#rsGrid .gq').forEach(r => {
+    const q = Number(r.dataset.q), m = mk ? mk[q - 1] : '';
+    r.querySelector('.gm').textContent = !mk ? '…' : m === '1' ? '✅' : m === '*' ? '🎁' : m === '0' || m === 'b' ? '❌' : '—';
+  });
 }
 function openResult(it) {
   CUR = it; reviewing = true; drawOverlay(null);
@@ -992,9 +1085,9 @@ function renderResult() {
     '<div class="rs-sub">' + (it.id ? 'รหัส ' + esc(it.id) + ' · ' : '') + esc(it.level || '') + (it.room ? ' ห้องสอบ ' + esc(it.room) : '') + '</div>' +
     '<div class="rs-st st-' + (it.status === 'ready' && it.flags.length ? 'flag' : it.status) + '">' + esc(st) + '</div>' +
     (it.status === 'ready' ? '<div class="rs-score" id="rsScore">' + scoreHtml(it) + '</div>' : '') +
-    '<div class="rs-sub">ตอบ ' + (it.n - blank) + ' ข้อ · ว่าง ' + blank + ' ข้อ · วงเขียว = คำตอบที่อ่านได้ แถบส้ม = ข้อที่ต้องดู' +
+    '<div class="rs-sub">ตอบ ' + (it.n - blank) + ' ข้อ · ว่าง ' + blank + ' ข้อ · วงเขียว = ถูก · วงแดง = ผิด · แถบเหลือง = ต้องตรวจทาน' +
     (it.raw && it.raw.idSource === 'strip' ? ' · อ่านรหัสจากแถบใต้ช่องลายมือชื่อ' : '') + '</div>' +
-    (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" autocomplete="off" placeholder="พิมพ์รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div><div class="rs-sub" id="rsIdHint">พิมพ์รหัสตามที่เขียนบนกระดาษ</div>' : '') +
+    (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" autocomplete="off" placeholder="พิมพ์รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div><div class="rs-sub" id="rsIdHint">พิมพ์รหัสตามที่เขียนบนกระดาษ</div><button class="btn soft" id="rsQr">📷 หรือส่องอ่าน QR ใกล้ๆ</button>' : '') +
     '<div id="rsGrid" class="hidden"></div>';
   $('rsOk').disabled = it.status !== 'ready';
   $('rsOk').textContent = it.flags.length ? '✅ ยืนยัน (ส่งไปตรวจทาน)' : '✅ ยืนยันบันทึก';
@@ -1007,6 +1100,19 @@ function renderResult() {
     });
     $('rsId').addEventListener('keydown', e => { if (e.key === 'Enter') $('rsIdOk').click(); });
   }
+  if ($('rsQr')) $('rsQr').addEventListener('click', () => {
+    const it = CUR;
+    $('resultView').classList.add('hidden');
+    reviewing = false;
+    startQrMode({
+      onFound: (id, lv) => {
+        if (ITEMS.some(x => x.id === id && x.status !== 'error')) { toast('รหัส ' + id + ' สแกนไปแล้ว', true); }
+        it.id = id; it.qrLevel = lv; it.answers = undefined; it.score = null; it.scoreErr = '';
+        resolve(it); openResult(it);
+      },
+      onCancel: () => openResult(it)
+    });
+  });
   if ($('rsIdOk')) $('rsIdOk').addEventListener('click', () => {
     it.id = $('rsId').value.replace(/\D/g, ''); it.answers = undefined;
     if (ITEMS.some(x => x.id === it.id && x.status !== 'error')) { toast('รหัสนี้สแกนไปแล้ว', true); return; }
@@ -1018,7 +1124,7 @@ function gridHtml(it) {
   for (let i = 1; i <= it.n; i++) {
     const a = it.answers[i - 1];
     h += '<div class="gq' + (it.flags.indexOf(i) > -1 ? ' flag' : '') + '" data-q="' + i + '"><span>' + i + '</span>' +
-      ['1', '2', '3', '4', '0'].map(c => '<button data-c="' + c + '" class="' + (a === c ? 'on' : '') + '">' + ACH[c] + '</button>').join('') +
+      ['1', '2', '3', '4', '0'].map(c => '<button data-c="' + c + '" class="' + (a === c ? 'on' : '') + '">' + ACH[c] + '</button>').join('') + '<i class="gm"></i>' +
       (a === 'X' ? '<em>ฝนหลายข้อ</em>' : '') + '</div>';
   }
   return h;
@@ -1027,7 +1133,7 @@ $('rsEdit').addEventListener('click', () => {
   const g = $('rsGrid');
   if (!g) return;
   if (!g.classList.contains('hidden')) { g.classList.add('hidden'); return; }
-  g.innerHTML = gridHtml(CUR); g.classList.remove('hidden');
+  g.innerHTML = gridHtml(CUR); g.classList.remove('hidden'); updateGridMarks();
   const first = g.querySelector('.gq.flag');
   (first || g).scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
@@ -1040,6 +1146,7 @@ $('resultView').addEventListener('click', e => {
   row.classList.remove('flag');
   row.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
   const em = row.querySelector('em'); if (em) em.remove();
+  row.querySelector('.gm').textContent = '…';
   CUR.thumb = OMR.preview(CUR.page, CUR.answers, CUR.flags, CUR.n, 2.2).toDataURL('image/jpeg', 0.65);
   $('rsBody').querySelector('.rs-img').src = CUR.thumb;
   const stEl = $('rsBody').querySelector('.rs-st');
@@ -1066,15 +1173,25 @@ function accept(it) {
   locked = true;
   setBanner('✅ ' + it.name + (it.score ? ' ' + it.score.total + ' คะแนน' : '') + (it.flags.length ? ' (ส่งตรวจทาน ' + it.flags.length + ' ข้อ)' : '') + ' เปลี่ยนแผ่นถัดไป', 'done');
   showLast(it); updateCount(); upload();
+  PENDING = null;
+  if (QRFIRST) { locked = false; startQrFirst(); }
 }
 $('btnShot').addEventListener('click', () => { if (!reviewing && running) capture(true); });
+function saveModes() { try { localStorage.setItem('scanConfirm', CONFIRM ? '1' : '0'); localStorage.setItem('scanQrFirst', QRFIRST ? '1' : '0'); } catch (e) {} }
 function renderMode() {
   $('btnMode').textContent = CONFIRM ? '✋ ยืนยันทุกแผ่น' : '⚡ บันทึกอัตโนมัติ';
   $('btnMode').classList.toggle('on', !CONFIRM);
+  $('btnQrFirst').textContent = QRFIRST ? '🔢 QR ก่อน: เปิด' : '🔢 QR ก่อน';
+  $('btnQrFirst').classList.toggle('on', QRFIRST);
 }
+$('btnQrFirst').addEventListener('click', () => {
+  QRFIRST = !QRFIRST; saveModes(); renderMode();
+  if (!QRFIRST) { stopQrMode(); PENDING = null; }
+  toast(QRFIRST ? 'ส่องอ่าน QR ใกล้ๆ ก่อน แล้วค่อยถ่ายทั้งแผ่น' : 'อ่าน QR จากภาพทั้งแผ่น (แบบเดิม)');
+});
 $('btnMode').addEventListener('click', () => {
   CONFIRM = !CONFIRM;
-  try { localStorage.setItem('scanConfirm', CONFIRM ? '1' : '0'); } catch (e) {}
+  saveModes();
   renderMode();
   toast(CONFIRM ? 'ยืนยันทุกแผ่นก่อนบันทึก' : 'บันทึกอัตโนมัติแผ่นที่อ่านชัด (แผ่นที่มีข้อสงสัยยังให้ยืนยัน)');
 });
