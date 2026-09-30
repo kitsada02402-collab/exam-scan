@@ -403,31 +403,51 @@ const OMR = (() => {
       if (bw < side * 0.008 || bh < side * 0.008 || bw > side * 0.08 || bh > side * 0.08) continue;
       const asp = bw / bh;
       if (asp < 0.6 || asp > 1.66) continue;
-      if (n / (bw * bh) < 0.72) continue;
+      if (n / (bw * bh) < 0.8) continue;                  // สี่เหลี่ยมทึบ (วงกลมทึบได้ประมาณ 0.78)
       // ต้องทึบทั้งก้อน (กันไม่ให้จับกรอบของ QR code)
       let dark = 0;
       [0.2, 0.35, 0.5, 0.65, 0.8].forEach(fy => [0.2, 0.35, 0.5, 0.65, 0.8].forEach(fx => {
         dark += bin[Math.round(miny + fy * (bh - 1)) * w + Math.round(minx + fx * (bw - 1))];
       }));
       if (dark < 23) continue;
+      // มุมของกรอบต้องดำด้วย (วงฝนที่พิมพ์ทึบ มุมกรอบจะเป็นสีขาว)
+      let cornerDark = 0;
+      [[0.12, 0.12], [0.88, 0.12], [0.12, 0.88], [0.88, 0.88]].forEach(([fx, fy]) => {
+        cornerDark += bin[Math.round(miny + fy * (bh - 1)) * w + Math.round(minx + fx * (bw - 1))];
+      });
+      if (cornerDark < 3) continue;
       comps.push({ x: sx / n, y: sy / n, size: (bw + bh) / 2 });
     }
     if (comps.length < 4) return null;
-    const corners = [[0, 0], [w, 0], [0, h], [w, h]];
-    const used = new Set();
-    const pick = corners.map(([cx, cy]) => {
-      let best = null, bd = Infinity;
-      comps.forEach((c, i) => { if (used.has(i)) return; const d = Math.hypot(c.x - cx, c.y - cy); if (d < bd) { bd = d; best = i; } });
-      used.add(best);
-      return comps[best];
-    });
-    // ตรวจความสมเหตุสมผล: ขนาดใกล้กัน และเป็นสี่เหลี่ยม
-    const sizes = pick.map(p => p.size), smax = Math.max.apply(null, sizes), smin = Math.min.apply(null, sizes);
-    if (smin < smax * 0.4) return null;
-    const top = Math.hypot(pick[1].x - pick[0].x, pick[1].y - pick[0].y);
-    const left = Math.hypot(pick[2].x - pick[0].x, pick[2].y - pick[0].y);
-    if (top < w * 0.3 && left < h * 0.3) return null;
-    return pick.map(p => [p.x, p.y]);        // TL, TR, BL, BR ตามตำแหน่งในภาพ
+    // เลือก 4 ก้อนที่ขนาดใกล้กันและล้อมพื้นที่ใหญ่ที่สุด เป็นรูปสี่เหลี่ยมสัดส่วนใกล้ A4
+    comps.sort((a, b) => b.size - a.size);
+    const cand = comps.slice(0, 12);
+    let best = null;
+    const N = cand.length;
+    for (let a = 0; a < N; a++) for (let b = a + 1; b < N; b++) for (let c = b + 1; c < N; c++) for (let d = c + 1; d < N; d++) {
+      const q = [cand[a], cand[b], cand[c], cand[d]];
+      const sz = q.map(p => p.size), smax = Math.max.apply(null, sz), smin = Math.min.apply(null, sz);
+      if (smin < smax * 0.55) continue;
+      const by = f => q.slice().sort((p1, p2) => f(p1) - f(p2));
+      const TL = by(p => p.x + p.y)[0], BR = by(p => p.x + p.y)[3];
+      const BL = by(p => p.x - p.y)[0], TR = by(p => p.x - p.y)[3];
+      if (new Set([TL, TR, BL, BR]).size < 4) continue;
+      const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+      const top = dist(TL, TR), bottom = dist(BL, BR), left = dist(TL, BL), right = dist(TR, BR);
+      const minSide = Math.min(top, bottom, left, right);
+      if (minSide < Math.max(w, h) * 0.15 || minSide < smax * 5) continue;
+      if (Math.min(top, bottom) < Math.max(top, bottom) * 0.6 || Math.min(left, right) < Math.max(left, right) * 0.6) continue;
+      const ratio = (left + right) / (top + bottom);
+      if (!((ratio > 1.15 && ratio < 1.9) || (ratio > 1 / 1.9 && ratio < 1 / 1.15))) continue;   // A4 = 1.46 (ตั้งหรือนอน)
+      // พื้นที่ (สูตรเชือกผูกรองเท้า) ต้องเป็นรูปนูน
+      const poly = [TL, TR, BR, BL];
+      let area = 0;
+      for (let i = 0; i < 4; i++) { const p1 = poly[i], p2 = poly[(i + 1) % 4]; area += p1.x * p2.y - p2.x * p1.y; }
+      area = Math.abs(area) / 2;
+      if (!best || area > best.area) best = { area: area, pts: [TL, TR, BL, BR] };
+    }
+    if (!best) return null;
+    return best.pts.map(p => [p.x, p.y]);        // TL, TR, BL, BR ตามตำแหน่งในภาพ
   }
 
   // ---------------- homography (มม. -> พิกเซล) ----------------
