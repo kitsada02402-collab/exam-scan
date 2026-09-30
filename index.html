@@ -47,10 +47,11 @@
   .banner.done { background: #1E8E5Ae6; }
   .banner.warn { background: #C93C3Ce6; }
   .cam-bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px)); background: linear-gradient(#0000, #000c); }
-  .last { display: flex; gap: 10px; align-items: center; padding: 8px; margin-bottom: 8px; background: #ffffffee; color: var(--ink); border-radius: 12px; font-size: .92rem; }
-  .last img { width: 44px; height: 62px; object-fit: cover; object-position: top; border-radius: 6px; }
+  .last { display: flex; gap: 10px; align-items: center; padding: 6px 8px; margin-top: 8px; background: #ffffffee; color: var(--ink); border-radius: 12px; font-size: .92rem; }
+  .last img { width: 30px; height: 42px; object-fit: cover; object-position: top; border-radius: 6px; }
   .cam-bar { display: flex; gap: 8px; align-items: center; }
-  .cam-bar .count { flex: 1; font-weight: 700; font-size: 1.05rem; }
+  .cam-bar .count { flex: 1; min-width: 0; font-weight: 700; font-size: 1.05rem; line-height: 1.25; }
+  .last-line { display: block; min-height: 1.2em; font-size: .78rem; font-weight: 600; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cam-bar button { min-width: 52px; height: 52px; border: none; border-radius: 14px; background: #ffffff26; color: #fff; font: inherit; font-size: 1.1rem; font-weight: 700; cursor: pointer; padding: 0 12px; }
   .cam-bar button.on { background: #FFD43B; color: #111; }
   .cam-bar .mode { font-size: .9rem; }
@@ -155,12 +156,11 @@
 <div id="camView" class="cam hidden">
   <video id="video" playsinline muted autoplay></video>
   <canvas id="overlay"></canvas>
-  <div class="cam-top"><div class="who"><span id="who"></span> <span id="camRes" style="opacity:.7"></span></div><div id="banner" class="banner">กำลังเปิดกล้อง…</div>
+  <div class="cam-top" id="camTop"><div class="who"><span id="who"></span> <span id="camRes" style="opacity:.7"></span></div><div id="banner" class="banner">กำลังเปิดกล้อง…</div>
     <button id="btnQrCancel" class="qr-cancel hidden">ยกเลิกส่อง QR</button></div>
-  <div class="cam-bottom">
-    <div id="last" class="last hidden"></div>
+  <div class="cam-bottom" id="camBottom">
     <div class="cam-bar">
-      <span class="count" id="count">💾 0</span>
+      <span class="count"><span id="count">💾 0</span><small id="last" class="last-line"></small></span>
       <button id="btnMode" class="mode"></button>
       <button id="btnTorch" class="hidden" aria-label="ไฟฉาย">🔦</button>
     </div>
@@ -569,13 +569,23 @@ const OMR = (() => {
     return paper > 0 ? (paper - bar) / paper : 0;
   }
 
-  function readPage(canvas) {
+  /**
+   * อ่าน 1 หน้า | given = จุดกลางสี่เหลี่ยม 4 มุมที่หาไว้แล้ว [TL, TR, BL, BR] (พิกเซลของ canvas)
+   * ใช้กับกล้องสดที่เล็งกรอบ 4 มุม: ไม่ต้องค้นหาทั้งภาพ แม่นและเร็วกว่า
+   */
+  function readPage(canvas, given) {
     const G0 = gray(canvas);
-    const S = downscale(G0, 900);
-    const pts = findMarkers(S);
-    if (!pts) return { ok: false, error: 'หาสี่เหลี่ยมดำไม่ครบ 4 มุม ถ่ายใหม่ให้เห็นครบทุกมุม' };
-    const img = pts.map(([x, y]) => [x / S.k, y / S.k]);
-    const tries = canvas.width > canvas.height ? [90, 270, 0, 180] : [0, 180, 90, 270];
+    let img, tries;
+    if (given && given.length === 4) {
+      img = given;
+      tries = [0, 180];                                     // เล็งแนวตั้งเสมอ: ตรงหรือกลับหัว
+    } else {
+      const S = downscale(G0, 900);
+      const pts = findMarkers(S);
+      if (!pts) return { ok: false, error: 'หาสี่เหลี่ยมดำไม่ครบ 4 มุม ถ่ายใหม่ให้เห็นครบทุกมุม' };
+      img = pts.map(([x, y]) => [x / S.k, y / S.k]);
+      tries = canvas.width > canvas.height ? [90, 270, 0, 180] : [0, 180, 90, 270];
+    }
     let H = null, qr = null, rot = tries[0], newSheet = false, src = '';
 
     // 1) กระดาษรุ่นใหม่: ดูแถบบอกทิศด้านบนซ้าย (เร็ว ไม่ต้องอ่าน QR)
@@ -738,6 +748,67 @@ const OMR = (() => {
     return c.toDataURL('image/jpeg', quality || 0.7);
   }
 
+  /**
+   * หาสี่เหลี่ยมดำ 1 อันในกรอบเล็ง (sx, sy, sw, sh = พื้นที่ในภาพต้นทาง) คืนจุดกลาง {x, y, size} หรือ null
+   * กรองเฉพาะสี่เหลี่ยมทึบที่อยู่ในกรอบทั้งอัน (วงฝนทึบ ตัวอักษร ลายไม้ ไม่ผ่าน)
+   */
+  const boxCv = document.createElement('canvas');
+  function findInBox(src, sx, sy, sw, sh, N) {
+    N = N || 96;
+    boxCv.width = N; boxCv.height = N;
+    const ctx = boxCv.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, N, N);
+    // ตัดส่วนที่เลยขอบภาพออก (กรอบเล็กที่ชิดขอบจอ)
+    const W0 = src.videoWidth || src.width, H0 = src.videoHeight || src.height;
+    const x0 = Math.max(0, sx), y0 = Math.max(0, sy), x1 = Math.min(W0, sx + sw), y1 = Math.min(H0, sy + sh);
+    if (x1 - x0 < 4 || y1 - y0 < 4) return null;
+    try { ctx.drawImage(src, x0, y0, x1 - x0, y1 - y0, (x0 - sx) * N / sw, (y0 - sy) * N / sh, (x1 - x0) * N / sw, (y1 - y0) * N / sh); }
+    catch (e) { return null; }
+    const d = ctx.getImageData(0, 0, N, N).data;
+    const g = new Uint8Array(N * N);
+    for (let i = 0, j = 0; i < g.length; i++, j += 4) g[i] = (d[j] * 77 + d[j + 1] * 150 + d[j + 2] * 29) >> 8;
+    const sorted = Array.from(g).sort((a, b) => a - b);
+    const p05 = sorted[Math.floor(g.length * 0.05)], p90 = sorted[Math.floor(g.length * 0.9)];
+    if (p90 - p05 < 45) return null;                               // ในกรอบไม่มีอะไรเข้มพอ
+    const thr = Math.min(170, (p05 + p90) / 2);
+    const bin = new Uint8Array(N * N);
+    for (let i = 0; i < g.length; i++) bin[i] = g[i] < thr ? 1 : 0;
+    const lab = new Int32Array(N * N), stack = new Int32Array(N * N);
+    let id = 0, best = null;
+    for (let i = 0; i < N * N; i++) {
+      if (!bin[i] || lab[i]) continue;
+      id++;
+      let sp = 0, n = 0, sxx = 0, syy = 0, minx = N, maxx = 0, miny = N, maxy = 0;
+      stack[sp++] = i; lab[i] = id;
+      while (sp) {
+        const p = stack[--sp], px = p % N, py = (p / N) | 0;
+        n++; sxx += px; syy += py;
+        if (px < minx) minx = px; if (px > maxx) maxx = px; if (py < miny) miny = py; if (py > maxy) maxy = py;
+        if (px > 0 && bin[p - 1] && !lab[p - 1]) { lab[p - 1] = id; stack[sp++] = p - 1; }
+        if (px < N - 1 && bin[p + 1] && !lab[p + 1]) { lab[p + 1] = id; stack[sp++] = p + 1; }
+        if (py > 0 && bin[p - N] && !lab[p - N]) { lab[p - N] = id; stack[sp++] = p - N; }
+        if (py < N - 1 && bin[p + N] && !lab[p + N]) { lab[p + N] = id; stack[sp++] = p + N; }
+      }
+      if (minx === 0 || miny === 0 || maxx === N - 1 || maxy === N - 1) continue;   // ต้องอยู่ในกรอบทั้งอัน
+      const bw = maxx - minx + 1, bh = maxy - miny + 1;
+      if (bw < N * 0.07 || bh < N * 0.07 || bw > N * 0.6 || bh > N * 0.6) continue;
+      const asp = bw / bh;
+      if (asp < 0.6 || asp > 1.66) continue;
+      if (n / (bw * bh) < 0.75) continue;
+      let inner = 0, corner = 0;
+      [0.2, 0.35, 0.5, 0.65, 0.8].forEach(fy => [0.2, 0.35, 0.5, 0.65, 0.8].forEach(fx => {
+        inner += bin[Math.round(miny + fy * (bh - 1)) * N + Math.round(minx + fx * (bw - 1))];
+      }));
+      [[0.15, 0.15], [0.85, 0.15], [0.15, 0.85], [0.85, 0.85]].forEach(([fx, fy]) => {
+        corner += bin[Math.round(miny + fy * (bh - 1)) * N + Math.round(minx + fx * (bw - 1))];
+      });
+      if (inner < 21 || corner < 3) continue;
+      if (!best || n > best.n) best = { n: n, cx: sxx / n, cy: syy / n, size: (bw + bh) / 2 };
+    }
+    if (!best) return null;
+    return { x: sx + (best.cx + 0.5) * sw / N, y: sy + (best.cy + 0.5) * sh / N, size: best.size * sw / N };
+  }
+
   /** ตรวจเร็วๆ ว่าเห็นสี่เหลี่ยมดำครบ 4 มุมไหม (ใช้กับกล้องสด) คืนจุด 4 มุมเป็นสัดส่วน 0-1 ของภาพ */
   function detect(canvas) {
     const S = downscale(gray(canvas), 560);
@@ -745,7 +816,7 @@ const OMR = (() => {
     return pts ? pts.map(([x, y]) => [x / S.w, y / S.h]) : null;
   }
 
-  return { G: G, loadLibs: loadLibs, pagesFromFile: pagesFromFile, readPage: readPage, preview: preview, toCanvas: toCanvas, jpeg: jpeg, detect: detect, readQR: readQR };
+  return { G: G, loadLibs: loadLibs, pagesFromFile: pagesFromFile, readPage: readPage, preview: preview, toCanvas: toCanvas, jpeg: jpeg, detect: detect, readQR: readQR, findInBox: findInBox };
 })();
 </script>
 <script>/* =====================================================================
@@ -994,29 +1065,86 @@ function loop() {
   try { tick(); } catch (e) { console.error(e); }
   setTimeout(loop, 160);
 }
+// ================= กรอบเล็ง 4 มุม (แบบแอปตรวจข้อสอบทั่วไป) =================
+// จุดกลางสี่เหลี่ยมบนกระดาษห่างกัน กว้าง 182 มม. สูง 269 มม.
+const MARK_RATIO = 269 / 182;
+const NEED_STABLE = 3;          // ต้องเจอครบ 4 กรอบและนิ่งติดกันกี่จังหวะก่อนถ่าย (ประมาณ 0.4 วินาที)
+let GUIDE = null, FOUND = [null, null, null, null], emptyTicks = 0;
+
+/** วางกรอบเล็งกลางพื้นที่ภาพ (ไม่ทับแถบบนและปุ่มล่าง) */
+function layoutGuide() {
+  if (!video.videoWidth) return null;
+  const r = video.getBoundingClientRect();
+  const k = Math.min(r.width / video.videoWidth, r.height / video.videoHeight);
+  const vw = video.videoWidth * k, vh = video.videoHeight * k;
+  const ox = (r.width - vw) / 2, oy = (r.height - vh) / 2;
+  const topUI = $('camTop').getBoundingClientRect().bottom - r.top + 6;
+  const botUI = r.bottom - $('camBottom').getBoundingClientRect().top + 6;
+  const ay = Math.max(oy, topUI), by = Math.min(oy + vh, r.height - botUI);
+  const aw = vw, ah = by - ay;
+  if (ah < 120) return null;
+  let gw = aw * 0.82, gh = gw * MARK_RATIO;
+  if (gh > ah * 0.86) { gh = ah * 0.86; gw = gh / MARK_RATIO; }
+  const gx = ox + (aw - gw) / 2, gy = ay + (ah - gh) / 2;
+  const bs = Math.max(60, gw * 0.24);                      // ขนาดกรอบเล็กแต่ละมุม
+  return {
+    k: k, ox: ox, oy: oy, bs: bs, gx: gx, gy: gy, gw: gw, gh: gh, rw: r.width, rh: r.height,
+    pts: [[gx, gy], [gx + gw, gy], [gx, gy + gh], [gx + gw, gy + gh]]   // TL, TR, BL, BR (จอ)
+  };
+}
+/** พื้นที่ของกรอบเล็ก i เป็นพิกเซลของวิดีโอ */
+function boxRegion(i) {
+  const G = GUIDE, [dx, dy] = G.pts[i], half = G.bs / 2;
+  return { sx: (dx - half - G.ox) / G.k, sy: (dy - half - G.oy) / G.k, sw: G.bs / G.k, sh: G.bs / G.k };
+}
+function drawGuide() {
+  const G = GUIDE;
+  overlay.width = G.rw; overlay.height = G.rh;
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0, 0, G.rw, G.rh);
+  const all = FOUND.every(Boolean);
+  // เส้นประกรอบกระดาษ
+  ctx.setLineDash([10, 10]); ctx.lineWidth = 2;
+  ctx.strokeStyle = all ? 'rgba(64,192,87,.8)' : 'rgba(255,255,255,.45)';
+  ctx.strokeRect(G.gx, G.gy, G.gw, G.gh);
+  ctx.setLineDash([]);
+  G.pts.forEach(([x, y], i) => {
+    const f = FOUND[i], h = G.bs / 2;
+    ctx.lineWidth = f ? 6 : 3;
+    ctx.strokeStyle = f ? '#40C057' : '#FFFFFF';
+    ctx.fillStyle = f ? 'rgba(64,192,87,.18)' : 'rgba(0,0,0,.12)';
+    ctx.beginPath(); ctx.rect(x - h, y - h, G.bs, G.bs); ctx.fill(); ctx.stroke();
+    if (f) {        // จุดที่เจอสี่เหลี่ยมดำ
+      const px = G.ox + f.x * G.k, py = G.oy + f.y * G.k;
+      ctx.fillStyle = '#40C057';
+      ctx.beginPath(); ctx.arc(px, py, 7, 0, Math.PI * 2); ctx.fill();
+    }
+  });
+}
+
 function tick() {
   if (reading || reviewing || !video.videoWidth) return;
   if (qrMode) { qrTick(); return; }
-  if (QRFIRST && !PENDING && !locked) { startQrFirst(); return; }
-  const pts = OMR.detect(frame(640));
-  if (!pts) {
-    missCount++;
-    if (missCount > 3) { locked = false; stable = 0; prev = null; seenSince = 0; qrFails = 0; }   // เอากระดาษออกแล้ว พร้อมแผ่นถัดไป
-    drawOverlay(null);
-    if (!locked) setBanner('📄 วางกระดาษให้เห็นสี่เหลี่ยมดำครบ 4 มุม (หรือกด 📸)', 'idle');
+  GUIDE = layoutGuide();
+  if (!GUIDE) return;
+  FOUND = [0, 1, 2, 3].map(i => { const b = boxRegion(i); return OMR.findInBox(video, b.sx, b.sy, b.sw, b.sh, 96); });
+  const n = FOUND.filter(Boolean).length;
+  drawGuide();
+  // เอากระดาษออก (เจอไม่ถึง 2 มุมติดกัน 3 จังหวะ) = พร้อมแผ่นถัดไป
+  if (n <= 1) { if (++emptyTicks >= 3) { locked = false; qrFails = 0; } } else emptyTicks = 0;
+  if (n < 4) {
+    stable = 0; prev = null;
+    if (!locked) setBanner(n ? '📐 ขยับให้สี่เหลี่ยมดำอยู่ในกรอบ (' + n + '/4)' : '📄 วางกระดาษให้สี่เหลี่ยมดำอยู่ในกรอบทั้ง 4 มุม', 'idle');
+    else setBanner('✅ บันทึกแล้ว เอากระดาษออก แล้ววางแผ่นถัดไป', 'done');
     return;
   }
-  missCount = 0;
-  if (!seenSince) seenSince = Date.now();
+  const pts = FOUND.map(f => [f.x / video.videoWidth, f.y / video.videoHeight]);
   const move = prev ? Math.max.apply(null, pts.map((p, i) => Math.hypot(p[0] - prev[i][0], p[1] - prev[i][1]))) : 1;
   prev = pts;
-  stable = move < 0.025 ? stable + 1 : 0;
-  drawOverlay(pts);
-  if (locked) return;
-  // ถ่ายเมื่อนิ่ง 2 จังหวะ หรือเห็นกระดาษต่อเนื่องเกิน 1.2 วินาที (มือสั่นเล็กน้อยก็ถ่ายได้)
-  const held = Date.now() - seenSince;
-  if (stable >= 2 || (held > 1200 && move < 0.05)) { capture(false); return; }
-  setBanner(qrFails ? '🔍 อ่าน QR อีกครั้ง (' + (qrFails + 1) + '/' + QR_TRIES + ') ถือนิ่งๆ…' : '✋ ถือนิ่งๆ ระบบจะถ่ายให้เอง…', 'hold', Math.min(1, held / 1200));
+  stable = move < 0.012 ? stable + 1 : 0;
+  if (locked) { setBanner('✅ บันทึกแล้ว เอากระดาษออก แล้ววางแผ่นถัดไป', 'done'); return; }
+  if (stable >= NEED_STABLE) { capture(false, FOUND.slice()); return; }
+  setBanner(qrFails ? '🔍 อ่านรหัสอีกครั้ง (' + (qrFails + 1) + '/' + QR_TRIES + ') ถือนิ่งๆ…' : '🟩 เจอครบ 4 มุม ถือนิ่งๆ…', 'hold', stable / NEED_STABLE);
 }
 
 // ================= ส่องอ่าน QR ใกล้ๆ =================
@@ -1103,13 +1231,30 @@ async function stillCanvas() {
   return frame(2000);
 }
 
-function capture(manual) {
+/** ภาพเต็มความละเอียดของวิดีโอ + จุดสี่เหลี่ยม 4 มุมที่หาละเอียดอีกรอบ */
+function grabWithPoints(found) {
+  const full = frame(4096);
+  const kf = full.width / video.videoWidth;
+  if (!found || !found.every(Boolean) || !GUIDE) return { canvas: full, pts: null };
+  const pts = found.map((f, i) => {
+    const b = boxRegion(i);
+    const g = OMR.findInBox(full, b.sx * kf, b.sy * kf, b.sw * kf, b.sh * kf, 200);   // หาซ้ำละเอียดขึ้น
+    return g ? [g.x, g.y] : [f.x * kf, f.y * kf];
+  });
+  return { canvas: full, pts: pts };
+}
+
+function capture(manual, found) {
   if (reading) return;
   reading = true;
   setBanner('📸 กำลังอ่าน…', 'hold');
-  setTimeout(async () => {
+  setTimeout(() => {
     let r;
-    try { r = OMR.readPage(await stillCanvas()); } catch (e) { r = { ok: false, error: e.message }; }
+    try {
+      const g = grabWithPoints(found || (FOUND.every(Boolean) ? FOUND.slice() : null));
+      r = OMR.readPage(g.canvas, g.pts);
+      if (!r.ok && g.pts) r = OMR.readPage(g.canvas);          // สำรอง: ค้นหาทั้งภาพ
+    } catch (e) { r = { ok: false, error: e.message }; }
     reading = false; stable = 0; seenSince = 0;
     if (!r.ok) { setBanner('⚠️ ' + r.error, 'warn'); if (manual) beep(330, 120, 2); return; }
     // รหัสจากช่องฝนรหัส (กระดาษรุ่นใหม่) หรือ QR/แถบรหัส (รุ่นก่อน)
@@ -1125,8 +1270,8 @@ function capture(manual) {
       // ลองครบแล้ว: เปิดหน้าให้พิมพ์รหัสนักเรียนเอง (คำตอบที่อ่านได้ยังใช้ได้)
     }
     qrFails = 0;
-    const found = m ? findStudent(m[1]) : null;
-    const id = m ? (found ? found.id : m[1]) : '';
+    const stu = m ? findStudent(m[1]) : null;
+    const id = m ? (stu ? stu.id : m[1]) : '';
     if (id && ITEMS.some(x => x.id === id && x.status !== 'error')) { locked = true; setBanner('🔁 รหัส ' + id + ' สแกนไปแล้ว เปลี่ยนแผ่นถัดไป', 'done'); beep(440, 90, 2); return; }
     const it = { key: 'k' + Date.now(), id: id, qrLevel: m ? m[2] : '', page: r.page, raw: r, status: 'ready', error: '', absent: !!r.absent, guess: r.idGuess || '' };
     resolve(it);
@@ -1304,7 +1449,7 @@ function closeResult(done) {
   $('resultView').classList.add('hidden');
   reviewing = false; CUR = null;
   locked = !!done;            // ยืนยันแล้ว: รอเอากระดาษออกก่อนถ่ายแผ่นใหม่ / ถ่ายใหม่: พร้อมถ่ายทันที
-  stable = 0; seenSince = 0;
+  stable = 0; seenSince = 0; prev = null; emptyTicks = 0;
   setBanner(done ? '✅ บันทึกแล้ว เปลี่ยนแผ่นถัดไป' : '📄 วางกระดาษให้เห็นสี่เหลี่ยมดำครบ 4 มุม', done ? 'done' : 'idle');
 }
 function accept(it) {
@@ -1317,7 +1462,7 @@ function accept(it) {
   PENDING = null;
   if (QRFIRST) { locked = false; startQrFirst(); }
 }
-$('btnShot').addEventListener('click', () => { if (!reviewing && running) capture(true); });
+$('btnShot').addEventListener('click', () => { if (!reviewing && running) capture(true, FOUND.every(Boolean) ? FOUND.slice() : null); });
 function saveModes() { try { localStorage.setItem('scanConfirm', CONFIRM ? '1' : '0'); localStorage.setItem('scanQrFirst', QRFIRST ? '1' : '0'); } catch (e) {} }
 function renderMode() {
   $('btnMode').textContent = CONFIRM ? '✋ ยืนยันทุกแผ่น' : '⚡ บันทึกอัตโนมัติ';
@@ -1337,10 +1482,10 @@ $('btnMode').addEventListener('click', () => {
 });
 renderMode();
 
+/** แผ่นล่าสุด: แสดงเป็นบรรทัดเล็กในแถบล่าง (ไม่ดันกรอบเล็งให้ขยับ) */
 function showLast(it) {
-  $('last').innerHTML = '<img src="' + it.thumb + '" alt=""><div><b>' + esc(it.name) + '</b><br><span>' + esc(it.id) + ' · ' + esc(it.room || it.level) +
-    (it.flags.length ? ' · ⚠️ ' + it.flags.length + ' ข้อ' : '') + '</span></div>';
-  $('last').classList.remove('hidden');
+  $('last').textContent = 'ล่าสุด: ' + it.name + (it.absent ? ' · ขาดสอบ' : it.score ? ' · ' + it.score.total + ' คะแนน' : '') +
+    (it.flags.length && !it.absent ? ' · ⚠️ ' + it.flags.length + ' ข้อ' : '');
 }
 function updateCount() {
   const saved = ITEMS.filter(x => x.status === 'saved').length;
