@@ -71,6 +71,8 @@
   .rs-score { margin: 6px 0; padding: 10px 12px; border-radius: 10px; background: #E8F1FE; color: var(--blue); font-size: 1.1rem; }
   .rs-score b { font-size: 1.6rem; }
   .rs-parts { font-size: .88rem; color: var(--muted); margin-top: 2px; }
+  .rs-idcrop { display: block; width: 60%; max-width: 260px; margin: 6px 0; border-radius: 8px; border: 1px solid var(--line); }
+  .li-acts button.danger { background: #FDECEC; color: var(--bad); }
   .rs-id { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 8px; }
   .rs-id .btn { margin: 0; width: auto; padding: 0 18px; }
   .rs-btns .btn { margin-top: 10px; }
@@ -551,7 +553,7 @@ const OMR = (() => {
   const ROT = { 0: [0, 1, 2, 3], 180: [3, 2, 1, 0], 90: [1, 3, 0, 2], 270: [2, 0, 3, 1] };
 
   // ---------------- อ่าน 1 หน้า ----------------
-  /** ความเข้มของแถบบอกทิศ เมื่อสมมติว่ากระดาษหมุนแบบ H (0 = ขาว, 1 = ดำ) */
+  /** ความเข้มของแถบบอกทิศ เมื่อสมมติว่ากระดาษหมุนแบบ H (0 = ขาว, 1 = ดำ) ยอมให้คลาดได้ ±1.5 มม. */
   function orientDark(G0, H) {
     const at = (u, v) => {
       const [x, y] = apply(H, u, v);
@@ -559,14 +561,76 @@ const OMR = (() => {
       return G0.g[iy * G0.w + ix];
     };
     const O = G.orient;
-    let bar = 0, paper = 0, n = 0;
-    for (let i = 0; i < 5; i++) for (let j = 0; j < 3; j++) {
-      bar += at(O.x + 1.5 + i * 2.2, O.y + 0.6 + j * 0.9);
-      paper += at(O.x + O.w + 5 + i * 2.2, O.y + 0.6 + j * 0.9);
-      n++;
+    let best = 0;
+    for (const oy of [-1.5, -0.75, 0, 0.75, 1.5]) for (const ox of [-1.5, 0, 1.5]) {
+      let bar = 0, paper = 0, n = 0;
+      for (let i = 0; i < 5; i++) {
+        bar += at(O.x + 2 + i * 2 + ox, O.y + O.h / 2 + oy);
+        paper += at(O.x + O.w + 6 + i * 2 + ox, O.y + O.h / 2 + oy);
+        n++;
+      }
+      bar /= n; paper /= n;
+      if (paper > 0) best = Math.max(best, (paper - bar) / paper);
     }
-    bar /= n; paper /= n;
-    return paper > 0 ? (paper - bar) / paper : 0;
+    return best;
+  }
+
+  /**
+   * อ่านช่องฝนรหัสนักเรียน 6 หลัก: แต่ละหลักเลื่อนหาตำแหน่งที่ตรงที่สุดเอง (±1.5 มม.)
+   * ภาพจากกล้องคลาดเล็กน้อยก็ยังอ่านได้
+   */
+  function readGrid(page) {
+    const W = page.width, Hh = page.height;
+    const d = page.getContext('2d').getImageData(0, 0, W, Hh).data;
+    const ink = (x, y) => {
+      const xx = Math.max(0, Math.min(W - 1, Math.round(x))), yy = Math.max(0, Math.min(Hh - 1, Math.round(y)));
+      const i = (yy * W + xx) * 4;
+      return 255 - Math.min(d[i], d[i + 1], d[i + 2]);
+    };
+    const GR = G.idGrid;
+    const samp = [];
+    for (let y = 26 * PX; y < 72 * PX; y += 3) for (let x = 153 * PX; x < 192 * PX; x += 3) samp.push(ink(x, y));
+    samp.sort((a, b) => a - b);
+    const paper = samp[Math.floor(samp.length * 0.3)], black = samp[Math.floor(samp.length * 0.995)];
+    const span = Math.max(40, black - paper);
+    const r = 1.0 * PX;
+    const fill = (u, v) => {
+      let s = 0, n = 0;
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy > r * r) continue;
+        s += ink(u * PX + dx, v * PX + dy); n++;
+      }
+      return Math.max(0, Math.min(1, (s / n - paper) / span));
+    };
+    const ds = [];
+    for (let c = 0; c < GR.cols; c++) {
+      let best = null;
+      for (let oy = -1.5; oy <= 1.51; oy += 0.5) for (let ox = -1.5; ox <= 1.51; ox += 0.5) {
+        const f = [];
+        for (let k = 0; k <= 9; k++) f.push(fill(GR.x0 + c * GR.pitch + ox, GR.y0 + k * GR.rowPitch + oy));
+        const o = f.map((v, i) => i).sort((x, y) => f[y] - f[x]);
+        const sc = f[o[0]] - f[o[1]];
+        if (!best || sc > best.sc) best = { sc: sc, a: f[o[0]], b: f[o[1]], digit: o[0] };
+      }
+      ds.push(best.a < 0.3 ? '' : (best.a >= 0.45 && best.sc >= 0.25) ? String(best.digit) : '?');
+    }
+    const first = ds.findIndex(x => x !== '');
+    const body = first < 0 ? [] : ds.slice(first);
+    const okCols = body.length > 0 && body.every(x => x !== '' && x !== '?');
+    const id = okCols ? String(Number(body.join(''))) : '';
+    // ช่องขาดสอบ (เลื่อนหาได้ ±1 มม.)
+    let ab = 0;
+    for (let oy = -1; oy <= 1.01; oy += 0.5) for (let ox = -1; ox <= 1.01; ox += 0.5) ab = Math.max(ab, fill(G.absent.x + ox, G.absent.y + oy));
+    return { ok: okCols && Number(id) > 0, id: id, guess: ds.map(x => x || '_').join(''), absent: ab >= 0.5 };
+  }
+
+  /** ภาพซูมช่องรหัสนักเรียน (ให้ดูเลขแล้วพิมพ์เองเมื่ออ่านไม่ได้) */
+  function idCrop(page) {
+    const k = PX, c = document.createElement('canvas');
+    const x0 = 147, y0 = 14, w = 47, h = 60;
+    c.width = Math.round(w * 6); c.height = Math.round(h * 6);
+    c.getContext('2d').drawImage(page, x0 * k, y0 * k, w * k, h * k, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.8);
   }
 
   /**
@@ -587,15 +651,20 @@ const OMR = (() => {
       tries = canvas.width > canvas.height ? [90, 270, 0, 180] : [0, 180, 90, 270];
     }
     let H = null, qr = null, rot = tries[0], newSheet = false, src = '';
+    let page = null, grid = null;
 
-    // 1) กระดาษรุ่นใหม่: ดูแถบบอกทิศด้านบนซ้าย (เร็ว ไม่ต้องอ่าน QR)
-    let best = null;
-    tries.forEach(t => {
-      const Ht = solveH(G.markers, ROT[t].map(i => img[i]));
-      const dk = orientDark(G0, Ht);
-      if (!best || dk > best.dk) best = { t: t, H: Ht, dk: dk };
-    });
-    if (best && best.dk > 0.4) { H = best.H; rot = best.t; newSheet = true; }
+    // 1) กระดาษรุ่นใหม่: ลองแต่ละทิศ (เริ่มจากทิศที่แถบบอกทิศเข้มที่สุด) แล้วเลือกทิศที่อ่านช่องรหัสได้ครบ
+    const cands = tries.map(t => { const Ht = solveH(G.markers, ROT[t].map(i => img[i])); return { t: t, H: Ht, dk: orientDark(G0, Ht) }; })
+      .sort((a, b) => b.dk - a.dk);
+    // มีแถบบอกทิศ (เข้มชัด) = กระดาษรุ่นใหม่ ลองเฉพาะทิศที่เห็นแถบ แล้วเลือกทิศที่อ่านช่องรหัสได้ครบ
+    for (const c of cands.filter(c => c.dk >= 0.25)) {
+      const pg = warp(canvas, c.H, 0, 0, PAGE_W, PAGE_H, PX);
+      const gr = readGrid(pg);
+      if (!grid || gr.ok) { H = c.H; rot = c.t; page = pg; grid = gr; }
+      if (gr.ok) break;
+    }
+    newSheet = !!grid;
+    if (!newSheet) { H = null; page = null; grid = null; }
 
     // 2) กระดาษรุ่นก่อน: ใช้ QR หาทิศ (อ่านหลายความละเอียด)
     if (!H) {
@@ -608,8 +677,9 @@ const OMR = (() => {
         }
       }
     }
-    let page = warp(canvas, H, 0, 0, PAGE_W, PAGE_H, PX);
-    const bub = readBubbles(page, newSheet);
+    if (!page) page = warp(canvas, H, 0, 0, PAGE_W, PAGE_H, PX);
+    const bub = readBubbles(page, false);
+    if (newSheet) { bub.grid = grid; bub.absent = grid.absent; }
 
     // รหัสนักเรียน: ช่องฝนรหัส (รุ่นใหม่) > QR > แถบรหัส (รุ่นก่อน)
     let studentId = '', levelDigit = '', idSource = '';
@@ -627,7 +697,8 @@ const OMR = (() => {
       if (m) { studentId = m[1]; levelDigit = m[2]; idSource = src; }
     }
     return Object.assign({ ok: true, qr: qr, studentId: studentId, levelDigit: levelDigit, idSource: idSource,
-      idGuess: newSheet ? bub.grid.guess : '', absent: newSheet && bub.absent, newSheet: newSheet, rotated: rot }, bub, { page: page });
+      idGuess: newSheet ? bub.grid.guess : '', absent: newSheet && bub.absent, newSheet: newSheet, rotated: rot,
+      idCrop: newSheet && !bub.grid.ok ? idCrop(page) : '' }, bub, { page: page, absent: newSheet && bub.absent });
   }
 
   function readBubbles(page, newSheet) {
@@ -816,7 +887,7 @@ const OMR = (() => {
     return pts ? pts.map(([x, y]) => [x / S.w, y / S.h]) : null;
   }
 
-  return { G: G, loadLibs: loadLibs, pagesFromFile: pagesFromFile, readPage: readPage, preview: preview, toCanvas: toCanvas, jpeg: jpeg, detect: detect, readQR: readQR, findInBox: findInBox };
+  return { G: G, loadLibs: loadLibs, pagesFromFile: pagesFromFile, readPage: readPage, preview: preview, toCanvas: toCanvas, jpeg: jpeg, detect: detect, readQR: readQR, findInBox: findInBox, idCrop: idCrop };
 })();
 </script>
 <script>/* =====================================================================
@@ -1363,19 +1434,21 @@ function openResult(it) {
 }
 function renderResult() {
   const it = CUR;
-  const st = { ready: it.flags.length ? '⚠️ ต้องดู ' + it.flags.length + ' ข้อ: ' + it.flags.join(', ') : '✅ อ่านได้ชัดเจนทุกข้อ', needid: '🔢 ' + it.error, error: '❌ ' + it.error }[it.status];
+  const st = { saved: '💾 บันทึกแล้ว ' + (it.total != null ? it.total + ' คะแนน' : '') + ' (แก้แล้วกดบันทึกการแก้ไข)', ready: it.flags.length ? '⚠️ ต้องดู ' + it.flags.length + ' ข้อ: ' + it.flags.join(', ') : '✅ อ่านได้ชัดเจนทุกข้อ', needid: '🔢 ' + it.error, error: '❌ ' + it.error }[it.status];
   const blank = [...it.answers].filter(a => a === '0').length;
   $('rsBody').innerHTML =
     '<img class="rs-img" src="' + it.thumb + '" alt="ภาพที่อ่านได้">' +
     '<div class="rs-name">' + esc(it.name) + '</div>' +
     '<div class="rs-sub">' + (it.id ? 'รหัส ' + esc(it.id) + ' · ' : '') + esc(it.level || '') + (it.room ? ' ห้องสอบ ' + esc(it.room) : '') + '</div>' +
     '<div class="rs-st st-' + (it.status === 'ready' && it.flags.length ? 'flag' : it.status) + '">' + esc(st) + '</div>' +
-    (it.status === 'ready' ? '<div class="rs-score" id="rsScore">' + scoreHtml(it) + '</div>' : '') +
+    (it.status === 'ready' || it.status === 'saved' ? '<div class="rs-score" id="rsScore">' + scoreHtml(it) + '</div>' : '') +
     '<div class="rs-sub">ตอบ ' + (it.n - blank) + ' ข้อ · ว่าง ' + blank + ' ข้อ · วงเขียว = ถูก · วงแดง = ผิด · แถบเหลือง = ต้องตรวจทาน' +
     (it.raw && it.raw.idSource === 'strip' ? ' · อ่านรหัสจากแถบใต้ช่องลายมือชื่อ' : '') + '</div>' +
+    (it.status === 'needid' && it.raw && it.raw.idCrop ? '<div class="rs-sub">ช่องรหัสบนกระดาษ (ดูเลขแล้วพิมพ์ตาม):</div><img class="rs-idcrop" src="' + it.raw.idCrop + '" alt="ช่องรหัสนักเรียน">' : '') +
     (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" autocomplete="off" placeholder="พิมพ์รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div><div class="rs-sub" id="rsIdHint">พิมพ์รหัสตามที่เขียนบนกระดาษ</div>' : '') +
     '<div id="rsGrid" class="hidden"></div>';
-  $('rsOk').disabled = it.status !== 'ready';
+  $('rsOk').disabled = it.status !== 'ready' && it.status !== 'saved';
+  $('rsRetake').textContent = $('listView').classList.contains('hidden') ? '🔄 ถ่ายใหม่' : '✖ ปิด';
   $('rsOk').textContent = it.absent ? '✅ ยืนยันบันทึกขาดสอบ' : it.flags.length ? '✅ ยืนยัน (ส่งไปตรวจทาน)' : '✅ ยืนยันบันทึก';
   if ($('rsId')) {
     setTimeout(() => $('rsId').focus(), 150);
@@ -1433,7 +1506,7 @@ $('resultView').addEventListener('click', e => {
   row.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
   const em = row.querySelector('em'); if (em) em.remove();
   row.querySelector('.gm').textContent = '…';
-  CUR.thumb = OMR.preview(CUR.page, CUR.answers, CUR.flags, CUR.n, 2.2).toDataURL('image/jpeg', 0.65);
+  if (CUR.page) CUR.thumb = OMR.preview(CUR.page, CUR.answers, CUR.flags, CUR.n, 2.2).toDataURL('image/jpeg', 0.65);
   $('rsBody').querySelector('.rs-img').src = CUR.thumb;
   const stEl = $('rsBody').querySelector('.rs-st');
   stEl.textContent = CUR.flags.length ? '⚠️ ต้องดู ' + CUR.flags.length + ' ข้อ: ' + CUR.flags.join(', ') : '✅ แก้แล้ว ครบทุกข้อ';
@@ -1443,17 +1516,25 @@ $('resultView').addEventListener('click', e => {
   if ($('rsScore')) $('rsScore').innerHTML = '🎯 กำลังคิดคะแนนใหม่…';
   clearTimeout(it._t); it._t = setTimeout(() => fetchScore(it), 500);
 });
-$('rsOk').addEventListener('click', () => { if (CUR && CUR.status === 'ready') { accept(CUR); closeResult(true); } });
+$('rsOk').addEventListener('click', () => { if (CUR && (CUR.status === 'ready' || CUR.status === 'saved')) { accept(CUR); closeResult(true); } });
 $('rsRetake').addEventListener('click', () => closeResult(false));
 function closeResult(done) {
+  const fromList = !$('listView').classList.contains('hidden');
   $('resultView').classList.add('hidden');
+  if (fromList) { reviewing = false; CUR = null; renderList(); return; }
   reviewing = false; CUR = null;
   locked = !!done;            // ยืนยันแล้ว: รอเอากระดาษออกก่อนถ่ายแผ่นใหม่ / ถ่ายใหม่: พร้อมถ่ายทันที
   stable = 0; seenSince = 0; prev = null; emptyTicks = 0;
   setBanner(done ? '✅ บันทึกแล้ว เปลี่ยนแผ่นถัดไป' : '📄 วางกระดาษให้เห็นสี่เหลี่ยมดำครบ 4 มุม', done ? 'done' : 'idle');
 }
 function accept(it) {
-  it.image = OMR.jpeg(it.page, 3, 0.7);
+  if (ITEMS.indexOf(it) > -1) {           // แก้แผ่นที่บันทึกแล้ว: ส่งทับคะแนนเดิม (ภาพเดิมในระบบยังอยู่)
+    it.status = 'ready'; it.ow = true; it.error = '';
+    showLast(it); updateCount(); renderList(); upload();
+    toast('กำลังบันทึกการแก้ไข ' + it.name);
+    return;
+  }
+  it.image = it.page ? OMR.jpeg(it.page, 3, 0.7) : null;
   it.page = null; it.raw = null;          // คืนหน่วยความจำ
   ITEMS.unshift(it);
   locked = true;
@@ -1542,6 +1623,7 @@ function renderList() {
     '<span class="st">' + S[x.status] + (x.status === 'saved' ? ' ' + x.total + ' คะแนน' : '') + (x.flags.length && x.status !== 'error' ? ' · ⚠️ ' + x.flags.length + ' ข้อไปตรวจทาน' : '') + '</span>' +
     (x.error ? '<br><span class="er">' + esc(x.error) + '</span>' : '') + '</div>' +
     '<div class="li-acts">' + (x.status === 'conflict' ? '<button data-act="over">แทนที่</button>' : '') +
+    (x.status === 'saved' ? '<button data-act="edit">✏️ แก้ไข</button><button data-act="cancel" class="danger">🗑️ ยกเลิก</button>' : '') +
     (x.status === 'error' || x.status === 'conflict' ? '<button data-act="del">ลบ</button>' : '') + '</div></div>').join('')
     : '<p class="empty">ยังไม่มีแผ่นที่สแกน</p>';
 }
@@ -1551,6 +1633,27 @@ $('items').addEventListener('click', e => {
   const x = ITEMS.find(i => i.key === b.closest('.li').dataset.k);
   if (b.dataset.act === 'zoom') Dlg.alert({ icon: 'info', title: x.name, html: '<img src="' + x.thumb + '" style="width:100%;border-radius:8px">' });
   if (b.dataset.act === 'del') { ITEMS.splice(ITEMS.indexOf(x), 1); renderList(); updateCount(); }
+  if (b.dataset.act === 'edit') {          // เปิดหน้าผลอีกครั้ง แก้คำตอบแล้วบันทึกทับ
+    gradeLocal(x);
+    openResult(x);
+    $('rsOk').textContent = '✅ บันทึกการแก้ไข';
+  }
+  if (b.dataset.act === 'cancel') {
+    Dlg.confirm({ icon: 'danger', danger: true, title: 'ยกเลิกผลสแกน?',
+      html: Dlg.rows([[['นักเรียน', esc(x.name)], ['รหัส', esc(x.id)], ['คะแนนที่บันทึก', esc(x.total)]]]) +
+        '<p class="dlg-note">ลบคะแนนและภาพของแผ่นนี้ออกจากระบบ นักเรียนจะกลับเป็น "ยังไม่มีคะแนน" แล้วสแกนใหม่ได้</p>',
+      okText: 'ยกเลิกผลสแกน', cancelText: 'ไม่ยกเลิก',
+      onOk: async (btn, close) => {
+        btn.disabled = true; btn.textContent = 'กำลังลบ…';
+        try {
+          const j = await call('deleteScan', { id: x.id });
+          if (!j.ok) throw new Error(j.error || 'ลบไม่สำเร็จ');
+          ITEMS.splice(ITEMS.indexOf(x), 1);
+          close(); renderList(); updateCount();
+          toast('ยกเลิกผลสแกนของ ' + x.name + ' แล้ว สแกนใหม่ได้');
+        } catch (e) { btn.disabled = false; btn.textContent = 'ยกเลิกผลสแกน'; toast(e.message, true); }
+      } });
+  }
   if (b.dataset.act === 'over') {
     Dlg.confirm({ icon: 'warning', danger: true, title: 'แทนที่คะแนนเดิม?',
       html: Dlg.rows([[['นักเรียน', esc(x.name)], ['รหัส', esc(x.id)], ['เหตุผล', esc(x.error)]]]) + '<p class="dlg-note">คะแนนเดิมจะถูกแทนด้วยผลสแกนครั้งนี้</p>',
