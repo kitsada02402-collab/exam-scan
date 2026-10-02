@@ -1372,7 +1372,7 @@ function resolve(it) {
   it.thumb = OMR.preview(it.page, it.answers, it.flags, n, 2.2, it.score && it.score.marks).toDataURL('image/jpeg', 0.65);
   if (!it.id) { it.status = 'needid'; it.error = 'อ่านรหัสนักเรียนไม่ได้' + (it.guess ? ' (อ่านได้ ' + it.guess + ')' : '') + ' พิมพ์รหัสเอง'; }
   else if (!st) { it.status = 'needid'; it.error = 'ไม่พบรหัส ' + it.id + ' ในรายชื่อที่มีที่นั่ง'; }
-  else if (it.qrLevel && 'ม.' + it.qrLevel !== st.level) { it.status = 'error'; it.error = 'กระดาษของ ม.' + it.qrLevel + ' แต่นักเรียนสอบ ' + st.level; }
+  else if (it.qrLevel && 'ม.' + it.qrLevel !== (st.grade || st.level)) { it.status = 'error'; it.error = 'กระดาษของ ม.' + it.qrLevel + ' แต่นักเรียนเรียน ' + (st.grade || st.level); }
 }
 
 // ---------------- หน้ายืนยันผลแต่ละแผ่น ----------------
