@@ -71,6 +71,13 @@
   .rs-score { margin: 6px 0; padding: 10px 12px; border-radius: 10px; background: #E8F1FE; color: var(--blue); font-size: 1.1rem; }
   .rs-score b { font-size: 1.6rem; }
   .rs-parts { font-size: .88rem; color: var(--muted); margin-top: 2px; }
+  .rs-fix { margin-top: 10px; padding: 10px; border-radius: 12px; background: #FFF6D6; display: grid; gap: 8px; }
+  .rs-fix .btn { margin: 0; }
+  .walk { margin-top: 10px; padding: 10px; border: 2px solid var(--line); border-radius: 12px; display: grid; gap: 8px; }
+  .walk .field { min-height: 44px; }
+  .wk2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .wk-chk { display: flex; gap: 8px; align-items: center; font-size: .9rem; }
+  .li.st-held .st { color: #9A6B00; }
   .rs-idcrop { display: block; width: 60%; max-width: 260px; margin: 6px 0; border-radius: 8px; border: 1px solid var(--line); }
   .li-acts button.danger { background: #FDECEC; color: var(--bad); }
   .rs-id { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 8px; }
@@ -1365,13 +1372,13 @@ function resolve(it) {
   const n = (lv && DATA.totals[lv]) || 100;
   it.level = lv; it.n = n;
   it.name = st ? st.name : (it.id ? '(ไม่พบรหัสนี้)' : '(อ่านรหัสนักเรียนไม่ได้)');
-  it.room = st ? st.room + ' ที่ ' + st.seat : '';
+  it.room = st ? (st.room ? st.room + ' ที่ ' + st.seat : 'ยังไม่มีที่นั่ง (ระบบจัดให้ตอนบันทึก)') : '';
   if (it.answers === undefined) { it.answers = it.raw.answers.slice(0, n); it.flags = it.raw.flags.filter(q => q <= n); }
   it.status = 'ready'; it.error = '';
   gradeLocal(it);
   it.thumb = OMR.preview(it.page, it.answers, it.flags, n, 2.2, it.score && it.score.marks).toDataURL('image/jpeg', 0.65);
   if (!it.id) { it.status = 'needid'; it.error = 'อ่านรหัสนักเรียนไม่ได้' + (it.guess ? ' (อ่านได้ ' + it.guess + ')' : '') + ' พิมพ์รหัสเอง'; }
-  else if (!st) { it.status = 'needid'; it.error = 'ไม่พบรหัส ' + it.id + ' ในรายชื่อที่มีที่นั่ง'; }
+  else if (!st) { it.status = 'needid'; it.notFound = true; it.error = 'ไม่พบรหัส ' + it.id + ' ในระบบ (ยังไม่ได้สมัคร หรือรหัสผิด)'; }
   else if (it.qrLevel && 'ม.' + it.qrLevel !== (st.grade || st.level)) { it.status = 'error'; it.error = 'กระดาษของ ม.' + it.qrLevel + ' แต่นักเรียนเรียน ' + (st.grade || st.level); }
 }
 
@@ -1445,7 +1452,10 @@ function renderResult() {
     '<div class="rs-sub">ตอบ ' + (it.n - blank) + ' ข้อ · ว่าง ' + blank + ' ข้อ · วงเขียว = ถูก · วงแดง = ผิด · แถบเหลือง = ต้องตรวจทาน' +
     (it.raw && it.raw.idSource === 'strip' ? ' · อ่านรหัสจากแถบใต้ช่องลายมือชื่อ' : '') + '</div>' +
     (it.status === 'needid' && it.raw && it.raw.idCrop ? '<div class="rs-sub">ช่องรหัสบนกระดาษ (ดูเลขแล้วพิมพ์ตาม):</div><img class="rs-idcrop" src="' + it.raw.idCrop + '" alt="ช่องรหัสนักเรียน">' : '') +
-    (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" autocomplete="off" placeholder="พิมพ์รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div><div class="rs-sub" id="rsIdHint">พิมพ์รหัสตามที่เขียนบนกระดาษ</div>' : '') +
+    (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" autocomplete="off" placeholder="พิมพ์รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div><div class="rs-sub" id="rsIdHint">พิมพ์รหัสตามที่เขียนบนกระดาษ</div>' +
+      '<div class="rs-fix"><div class="rs-sub"><b>ไม่พบในระบบ?</b> เลือกทางใดทางหนึ่ง</div>' +
+      (DATA.canRegister ? '<button class="btn soft" id="rsWalk">📝 สมัครหน้างานเลย (แล้วบันทึกคะแนน)</button>' : '') +
+      '<button class="btn soft" id="rsHold">⏸️ พักแผ่นนี้ไว้ ให้แอดมินจับคู่ทีหลัง</button></div><div id="rsWalkForm"></div>' : '') +
     '<div id="rsGrid" class="hidden"></div>';
   $('rsOk').disabled = it.status !== 'ready' && it.status !== 'saved';
   $('rsRetake').textContent = $('listView').classList.contains('hidden') ? '🔄 ถ่ายใหม่' : '✖ ปิด';
@@ -1472,12 +1482,84 @@ function renderResult() {
       onCancel: () => openResult(it)
     });
   });
+  if ($('rsWalk')) $('rsWalk').addEventListener('click', () => walkInForm(it));
+  if ($('rsHold')) $('rsHold').addEventListener('click', () => holdItem(it, true));
   if ($('rsIdOk')) $('rsIdOk').addEventListener('click', () => {
     it.id = $('rsId').value.replace(/\D/g, ''); it.answers = undefined;
     if (ITEMS.some(x => x.id === it.id && x.status !== 'error')) { toast('รหัสนี้สแกนไปแล้ว', true); return; }
     resolve(it); renderResult();
   });
 }
+// ---------------- ผู้สมัครหน้างาน: สมัคร + จัดที่นั่งจากหน้าสแกน ----------------
+function walkInForm(it) {
+  const box = $('rsWalkForm');
+  const g = DATA.grades || ['ม.1', 'ม.2', 'ม.3', 'ม.4', 'ม.5', 'ม.6'];
+  box.innerHTML = '<div class="walk">' +
+    '<div class="rs-sub"><b>📝 สมัครหน้างาน</b> (ค่าสมัครรับเงินภายหลังได้ที่เมนูรับเงิน)</div>' +
+    '<input class="field" id="wkId" inputmode="numeric" placeholder="รหัสนักเรียน" value="' + esc(it.id || '') + '">' +
+    '<div class="rs-sub" id="wkHint"></div>' +
+    '<select class="field" id="wkPre"><option value="">คำนำหน้า</option><option>เด็กชาย</option><option>เด็กหญิง</option><option>นาย</option><option>นางสาว</option></select>' +
+    '<div class="wk2"><input class="field" id="wkFirst" placeholder="ชื่อ"><input class="field" id="wkLast" placeholder="นามสกุล"></div>' +
+    '<div class="wk2"><select class="field" id="wkGrade">' + g.map(x => '<option>' + x + '</option>').join('') + '</select><select class="field" id="wkRoom"></select></div>' +
+    '<input class="field" id="wkPhone" inputmode="tel" placeholder="เบอร์โทร (ไม่บังคับ)">' +
+    '<label class="wk-chk hidden" id="wkNotInWrap"><input type="checkbox" id="wkNotIn"> ไม่อยู่ในทะเบียน (นักเรียนใหม่) ยืนยันโดยเจ้าหน้าที่</label>' +
+    '<button class="btn" id="wkGo">สมัคร + จัดที่นั่ง</button></div>';
+  const fillRooms = () => {
+    const n = (DATA.classCounts || {})[$('wkGrade').value] || 15;
+    $('wkRoom').innerHTML = Array.from({ length: n }, (_, i) => '<option value="' + (i + 1) + '">' + $('wkGrade').value + '/' + (i + 1) + '</option>').join('');
+  };
+  fillRooms();
+  $('wkGrade').addEventListener('change', fillRooms);
+  const look = async () => {
+    const id = $('wkId').value.replace(/\D/g, '');
+    if (id.length < 4) { $('wkHint').textContent = ''; return; }
+    try {
+      const r = await call('rosterLookup', { id: id });
+      if (!r.found) { $('wkHint').textContent = 'ไม่พบในทะเบียนนักเรียน กรอกเอง'; $('wkNotInWrap').classList.remove('hidden'); return; }
+      $('wkNotInWrap').classList.add('hidden');
+      $('wkHint').textContent = '✅ พบในทะเบียน เติมให้แล้ว';
+      $('wkPre').value = r.prefix || ''; $('wkFirst').value = r.firstName || ''; $('wkLast').value = r.lastName || '';
+      if (r.grade) { $('wkGrade').value = r.grade; fillRooms(); if (r.room) $('wkRoom').value = r.room; }
+    } catch (e) { $('wkHint').textContent = ''; }
+  };
+  $('wkId').addEventListener('change', look);
+  look();
+  $('wkGo').addEventListener('click', async () => {
+    const btn = $('wkGo');
+    const f = { studentId: $('wkId').value.replace(/\D/g, ''), prefix: $('wkPre').value, firstName: $('wkFirst').value.trim(), lastName: $('wkLast').value.trim(),
+      level: $('wkGrade').value, classNo: $('wkRoom').value, phone: $('wkPhone').value.trim(), notInRoster: $('wkNotIn').checked };
+    if (!f.studentId || !f.prefix || !f.firstName || !f.lastName) { toast('กรอกรหัส คำนำหน้า ชื่อ และนามสกุล', true); return; }
+    btn.disabled = true; btn.textContent = 'กำลังสมัคร…';
+    try {
+      const r = await call('walkin', { form: f });
+      if (!r.ok) throw new Error(r.msg || r.error || 'สมัครไม่สำเร็จ');
+      if (r.student) DATA.students.push(r.student);
+      toast('สมัครแล้ว: ' + (r.student ? r.student.name + (r.seated ? ' · ห้องสอบ ' + r.student.room + ' ที่ ' + r.student.seat : ' (ยังไม่มีที่นั่ง)') : f.studentId));
+      it.id = f.studentId; it.notFound = false; it.answers = undefined;
+      resolve(it); renderResult();
+    } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = 'สมัคร + จัดที่นั่ง'; }
+  });
+}
+
+// ---------------- พักแผ่นที่จับคู่ไม่ได้ ----------------
+async function holdItem(it, fromResult) {
+  const ok = await Dlg.confirm({ icon: 'question', title: 'พักแผ่นนี้ไว้?',
+    html: '<p class="dlg-note">คำตอบและภาพจะเก็บไว้ในระบบ แอดมินหรือครูที่ตรวจทานจับคู่กับนักเรียนได้ภายหลัง (เมนูตรวจทาน > แผ่นรอจับคู่)</p>',
+    okText: 'พักไว้' });
+  if (!ok) return;
+  try {
+    const image = it.image || (it.page ? OMR.jpeg(it.page, 3, 0.7) : '');
+    const r = await call('hold', { items: [{ key: it.key, id: it.id || '', answers: it.answers, flags: it.flags, absent: !!it.absent, image: image }] });
+    if (!r.ok) throw new Error(r.error || 'พักไม่สำเร็จ');
+    it.status = 'held'; it.error = ''; it.page = null; it.raw = null; it.image = null;
+    if (ITEMS.indexOf(it) < 0) ITEMS.unshift(it);
+    if (!it.name || /ไม่พบ|อ่านรหัส/.test(it.name)) it.name = 'แผ่นรอจับคู่' + (it.id ? ' (รหัส ' + it.id + ')' : '');
+    updateCount(); renderList();
+    toast('พักแผ่นไว้แล้ว');
+    if (fromResult) closeResult(true);
+  } catch (e) { toast(e.message, true); }
+}
+
 function gridHtml(it) {
   let h = '';
   for (let i = 1; i <= it.n; i++) {
@@ -1615,7 +1697,7 @@ $('btnBack').addEventListener('click', () => $('listView').classList.add('hidden
 $('btnLogout').addEventListener('click', () => logout(''));
 function renderList() {
   const S = {
-    ready: '⏳ รอส่ง', sending: '⏳ กำลังส่ง…', saved: '💾 บันทึกแล้ว', conflict: '🔁 มีคะแนนอยู่แล้ว', error: '❌ ใช้ไม่ได้'
+    ready: '⏳ รอส่ง', sending: '⏳ กำลังส่ง…', saved: '💾 บันทึกแล้ว', conflict: '🔁 มีคะแนนอยู่แล้ว', error: '❌ ใช้ไม่ได้', held: '⏸️ พักไว้ รอจับคู่'
   };
   $('items').innerHTML = ITEMS.length ? ITEMS.map(x =>
     '<div class="li st-' + x.status + '" data-k="' + x.key + '"><img src="' + x.thumb + '" alt="" data-act="zoom">' +
@@ -1624,6 +1706,8 @@ function renderList() {
     (x.error ? '<br><span class="er">' + esc(x.error) + '</span>' : '') + '</div>' +
     '<div class="li-acts">' + (x.status === 'conflict' ? '<button data-act="over">แทนที่</button>' : '') +
     (x.status === 'saved' ? '<button data-act="edit">✏️ แก้ไข</button><button data-act="cancel" class="danger">🗑️ ยกเลิก</button>' : '') +
+    (x.status === 'error' && x.image ? '<button data-act="hold">⏸️ พักไว้</button>' : '') +
+    (x.status === 'error' && DATA.canRegister && /ไม่พบรหัส/.test(x.error || '') ? '<button data-act="fix">📝 สมัคร/แก้รหัส</button>' : '') +
     (x.status === 'error' || x.status === 'conflict' ? '<button data-act="del">ลบ</button>' : '') + '</div></div>').join('')
     : '<p class="empty">ยังไม่มีแผ่นที่สแกน</p>';
 }
@@ -1633,6 +1717,8 @@ $('items').addEventListener('click', e => {
   const x = ITEMS.find(i => i.key === b.closest('.li').dataset.k);
   if (b.dataset.act === 'zoom') Dlg.alert({ icon: 'info', title: x.name, html: '<img src="' + x.thumb + '" style="width:100%;border-radius:8px">' });
   if (b.dataset.act === 'del') { ITEMS.splice(ITEMS.indexOf(x), 1); renderList(); updateCount(); }
+  if (b.dataset.act === 'hold') holdItem(x, false);
+  if (b.dataset.act === 'fix') { x.status = 'needid'; x.notFound = true; openResult(x); }
   if (b.dataset.act === 'edit') {          // เปิดหน้าผลอีกครั้ง แก้คำตอบแล้วบันทึกทับ
     gradeLocal(x);
     openResult(x);
