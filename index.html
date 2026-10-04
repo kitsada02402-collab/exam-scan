@@ -286,7 +286,8 @@ const OMR = (() => {
     bubbleX0: 16, bubblePitch: 7.2, bubbleD: 4.6,
     strip: { x0: 25, y: 272.5, step: 5, size: 3, n: 32 },      // (กระดาษรุ่นก่อน) แถบรหัสสำรองใต้ช่องลายมือชื่อ
     orient: { x: 22, y: 11, w: 12, h: 3 },                     // แถบบอกทิศด้านบนซ้าย
-    idGrid: { cols: 6, x0: 157.5, pitch: 6.2, y0: 29.5, rowPitch: 4.2, d: 3.4 },    // ช่องฝนรหัสนักเรียน
+    idGrid: { cols: 5, x0: 160.6, pitch: 6.2, y0: 29.5, rowPitch: 4.2, d: 3.4 },    // ช่องฝนรหัสนักเรียน 5 หลัก (ต้องตรงกับ Print.html)
+    idGridOld: { cols: 6, x0: 157.5, pitch: 6.2, y0: 29.5, rowPitch: 4.2, d: 3.4 },  // กระดาษรุ่นก่อน (6 หลัก) ยังอ่านได้
     absent: { x: 143.5, y: 56, d: 4.2 }                        // ช่องฝนขาดสอบ
   };
   const PX = 4;                      // ความละเอียดภาพที่ดัดแล้ว (พิกเซลต่อ มม.)
@@ -587,6 +588,12 @@ const OMR = (() => {
    * ภาพจากกล้องคลาดเล็กน้อยก็ยังอ่านได้
    */
   function readGrid(page) {
+    // อ่านทั้งแบบ 5 หลัก (ปัจจุบัน) และ 6 หลัก (กระดาษที่พิมพ์ไว้ก่อน) แล้วเลือกแบบที่วงฝนตรงตำแหน่งชัดกว่า
+    const a = readGridWith(page, G.idGrid), b = readGridWith(page, G.idGridOld);
+    if (a.ok && b.ok) return a.conf >= b.conf ? a : b;
+    return a.ok ? a : b.ok ? b : a;
+  }
+  function readGridWith(page, GR) {
     const W = page.width, Hh = page.height;
     const d = page.getContext('2d').getImageData(0, 0, W, Hh).data;
     const ink = (x, y) => {
@@ -594,7 +601,6 @@ const OMR = (() => {
       const i = (yy * W + xx) * 4;
       return 255 - Math.min(d[i], d[i + 1], d[i + 2]);
     };
-    const GR = G.idGrid;
     const samp = [];
     for (let y = 26 * PX; y < 72 * PX; y += 3) for (let x = 153 * PX; x < 192 * PX; x += 3) samp.push(ink(x, y));
     samp.sort((a, b) => a - b);
@@ -610,6 +616,7 @@ const OMR = (() => {
       return Math.max(0, Math.min(1, (s / n - paper) / span));
     };
     const ds = [];
+    let conf = 0;
     for (let c = 0; c < GR.cols; c++) {
       let best = null;
       for (let oy = -1.5; oy <= 1.51; oy += 0.5) for (let ox = -1.5; ox <= 1.51; ox += 0.5) {
@@ -620,6 +627,8 @@ const OMR = (() => {
         if (!best || sc > best.sc) best = { sc: sc, a: f[o[0]], b: f[o[1]], digit: o[0] };
       }
       ds.push(best.a < 0.3 ? '' : (best.a >= 0.45 && best.sc >= 0.25) ? String(best.digit) : '?');
+      // ความชัด: วงที่ฝนต้องเข้ม และวงอื่นในหลักเดียวกันต้องขาว (ถ้าวางผิดแบบ จะเหลื่อมไปทับขอบวง ค่าจะต่ำ)
+      if (best.a >= 0.3) conf += best.sc;
     }
     const first = ds.findIndex(x => x !== '');
     const body = first < 0 ? [] : ds.slice(first);
@@ -628,7 +637,8 @@ const OMR = (() => {
     // ช่องขาดสอบ (เลื่อนหาได้ ±1 มม.)
     let ab = 0;
     for (let oy = -1; oy <= 1.01; oy += 0.5) for (let ox = -1; ox <= 1.01; ox += 0.5) ab = Math.max(ab, fill(G.absent.x + ox, G.absent.y + oy));
-    return { ok: okCols && Number(id) > 0, id: id, guess: ds.map(x => x || '_').join(''), absent: ab >= 0.5 };
+    const used = ds.filter(x => x !== '').length;
+    return { ok: okCols && Number(id) > 0, id: id, guess: ds.map(x => x || '_').join(''), absent: ab >= 0.5, conf: used ? conf / used : 0, cols: GR.cols };
   }
 
   /** ภาพซูมช่องรหัสนักเรียน (ให้ดูเลขแล้วพิมพ์เองเมื่ออ่านไม่ได้) */
