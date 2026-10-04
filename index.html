@@ -71,6 +71,8 @@
   .rs-score { margin: 6px 0; padding: 10px 12px; border-radius: 10px; background: #E8F1FE; color: var(--blue); font-size: 1.1rem; }
   .rs-score b { font-size: 1.6rem; }
   .rs-parts { font-size: .88rem; color: var(--muted); margin-top: 2px; }
+  .sug-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .sug { padding: 8px 12px; border: 2px solid #9EC2F2; border-radius: 999px; background: #E9F2FF; color: #1E62C8; font: inherit; font-size: .9rem; font-weight: 700; }
   .rs-fix { margin-top: 10px; padding: 10px; border-radius: 12px; background: #FFF6D6; display: grid; gap: 8px; }
   .rs-fix .btn { margin: 0; }
   .walk { margin-top: 10px; padding: 10px; border: 2px solid var(--line); border-radius: 12px; display: grid; gap: 8px; }
@@ -1463,6 +1465,7 @@ function renderResult() {
     (it.raw && it.raw.idSource === 'strip' ? ' · อ่านรหัสจากแถบใต้ช่องลายมือชื่อ' : '') + '</div>' +
     (it.status === 'needid' && it.raw && it.raw.idCrop ? '<div class="rs-sub">ช่องรหัสบนกระดาษ (ดูเลขแล้วพิมพ์ตาม):</div><img class="rs-idcrop" src="' + it.raw.idCrop + '" alt="ช่องรหัสนักเรียน">' : '') +
     (it.status === 'needid' ? '<div class="rs-id"><input class="field" id="rsId" inputmode="numeric" autocomplete="off" placeholder="พิมพ์รหัสนักเรียน" value="' + esc(it.id) + '"><button class="btn" id="rsIdOk">ตกลง</button></div><div class="rs-sub" id="rsIdHint">พิมพ์รหัสตามที่เขียนบนกระดาษ</div>' +
+      idSuggestLive(it) +
       '<div class="rs-fix"><div class="rs-sub"><b>ไม่พบในระบบ?</b> เลือกทางใดทางหนึ่ง</div>' +
       (DATA.canRegister ? '<button class="btn soft" id="rsWalk">📝 สมัครหน้างานเลย (แล้วบันทึกคะแนน)</button>' : '') +
       '<button class="btn soft" id="rsHold">⏸️ พักแผ่นนี้ไว้ ให้แอดมินจับคู่ทีหลัง</button></div><div id="rsWalkForm"></div>' : '') +
@@ -1493,6 +1496,9 @@ function renderResult() {
     });
   });
   if ($('rsWalk')) $('rsWalk').addEventListener('click', () => walkInForm(it));
+  document.querySelectorAll('#rsBody [data-sug]').forEach(b => b.addEventListener('click', () => {
+    it.id = b.dataset.sug; it.answers = undefined; it.notFound = false; resolve(it); renderResult();
+  }));
   if ($('rsHold')) $('rsHold').addEventListener('click', () => holdItem(it, true));
   if ($('rsIdOk')) $('rsIdOk').addEventListener('click', () => {
     it.id = $('rsId').value.replace(/\D/g, ''); it.answers = undefined;
@@ -1500,6 +1506,18 @@ function renderResult() {
     resolve(it); renderResult();
   });
 }
+/** อ่านรหัสได้บางส่วน (เช่น 19?69): เสนอรายชื่อที่ใกล้เคียงให้แตะเลือก */
+function idSuggestLive(it) {
+  let g = String(it.guess || '');
+  if (!g || !/[0-9]/.test(g)) return '';
+  if (g.length === 6) g = g.replace(/^[0_]/, '');
+  if (!/[_?]/.test(g)) return '';
+  const re = new RegExp('^' + g.split('').map(c => /[0-9]/.test(c) ? c : '\\d').join('') + '$');
+  const c = DATA.students.filter(s => re.test(s.id)).slice(0, 5);
+  return '<div class="rs-sub">อ่านได้บางส่วน: <b>' + esc(g.replace(/_/g, '·')) + '</b>' + (c.length ? ' อาจเป็น:' : ' (ไม่พบชื่อที่ตรง)') + '</div>' +
+    (c.length ? '<div class="sug-list">' + c.map(s => '<button class="sug" data-sug="' + esc(s.id) + '">' + esc(s.id + ' ' + s.name) + '</button>').join('') + '</div>' : '');
+}
+
 // ---------------- ผู้สมัครหน้างาน: สมัคร + จัดที่นั่งจากหน้าสแกน ----------------
 function walkInForm(it) {
   const box = $('rsWalkForm');
