@@ -746,11 +746,51 @@ const OMR = (() => {
       const mean = Math.max(0, Math.min(1, (s / n - paper) / span));
       return Math.max(mean, Math.min(1, (dk / n) * 1.15));
     };
+    // ---- จัดแนววงคำตอบทีละกลุ่ม (คอลัมน์ละ 5 แถว) ----
+    // กระดาษโค้ง/พิมพ์เพี้ยนทำให้วงคลาดจากตำแหน่งตายตัวได้ 1–2 มม. หาตำแหน่งที่ "ขอบวง" ทับเส้นพิมพ์มากที่สุด
+    const R = G.bubbleD / 2;
+    const ANG = [];
+    for (let a = 0; a < 16; a++) ANG.push([Math.cos(a * Math.PI / 8), Math.sin(a * Math.PI / 8)]);
+    const ringAt = (u, v) => {
+      let t = 0;
+      ANG.forEach(([cx, cy]) => { t += ink((u + cx * R * 0.93) * PX, (v + cy * R * 0.93) * PX); });
+      return t / ANG.length;
+    };
+    const centerAt = (u, v) => ink(u * PX, v * PX);
+    const off = {};               // key = col*10+block -> [dx, dy] (มม.)
+    const BLOCK = 5;
+    for (let col = 0; col < G.colX.length; col++) for (let blk = 0; blk < G.rowsPerCol / BLOCK; blk++) {
+      let best = null;
+      for (let dy = -2.4; dy <= 2.41; dy += 0.3) for (let dx = -2.4; dx <= 2.41; dx += 0.3) {
+        let sc = 0;
+        for (let rr = 0; rr < BLOCK; rr++) {
+          const v = G.firstRowY + (blk * BLOCK + rr) * G.rowPitch + dy;
+          for (let k = 0; k < 4; k++) {
+            const u = G.colX[col] + G.bubbleX0 + k * G.bubblePitch + dx;
+            // ขอบวงต้องเข้ม (เส้นพิมพ์) และกลางวงว่างที่ไม่ได้ฝนต้องขาว -> ใช้ขอบลบกึ่งกลางเฉพาะส่วนที่เกินขอบ
+            sc += ringAt(u, v) - Math.max(0, centerAt(u, v) - ringAt(u, v)) * 0.3;
+          }
+        }
+        // ชอบตำแหน่งเดิมเล็กน้อย (กันกระโดดไปวงข้างเคียง)
+        sc -= (Math.abs(dx) + Math.abs(dy)) * 2;
+        if (!best || sc > best.sc) best = { sc: sc, dx: dx, dy: dy };
+      }
+      off[col * 10 + blk] = [best.dx, best.dy];
+    }
+    // กลุ่มที่เลื่อนต่างจากกลุ่มข้างเคียงมากผิดปกติ (> 1.2 มม.) ใช้ค่าเฉลี่ยของข้างเคียงแทน
+    for (let col = 0; col < G.colX.length; col++) for (let blk = 0; blk < G.rowsPerCol / BLOCK; blk++) {
+      const nb = [off[col * 10 + blk - 1], off[col * 10 + blk + 1]].filter(Boolean);
+      if (!nb.length) continue;
+      const m = [nb.reduce((t, o) => t + o[0], 0) / nb.length, nb.reduce((t, o) => t + o[1], 0) / nb.length];
+      const o = off[col * 10 + blk];
+      if (Math.abs(o[0] - m[0]) > 1.2 || Math.abs(o[1] - m[1]) > 1.2) off[col * 10 + blk] = m;
+    }
     const fills = [];
     for (let q = 1; q <= 100; q++) {
       const col = Math.floor((q - 1) / G.rowsPerCol), row = (q - 1) % G.rowsPerCol;
-      const v = G.firstRowY + row * G.rowPitch;
-      fills.push([0, 1, 2, 3].map(k => fillAt(G.colX[col] + G.bubbleX0 + k * G.bubblePitch, v)));
+      const o = off[col * 10 + Math.floor(row / BLOCK)] || [0, 0];
+      const v = G.firstRowY + row * G.rowPitch + o[1];
+      fills.push([0, 1, 2, 3].map(k => fillAt(G.colX[col] + G.bubbleX0 + k * G.bubblePitch + o[0], v)));
     }
     // เกณฑ์ปรับตามแผ่น: ระดับวงว่าง (ค่ากลาง) เทียบกับระดับวงที่ฝน (ข้อที่ฝนเข้มที่สุดส่วนใหญ่)
     const all = fills.flat().sort((a, b) => a - b);
@@ -791,7 +831,14 @@ const OMR = (() => {
       grid = { ok: !!okCols && Number(id) > 0, id: id, guess: ds.map(d => d || '_').join('') };
       absent = fillAt(G.absent.x, G.absent.y, 1.4 * PX) >= 0.45;
     }
-    return { answers: answers.join(''), fills: fills, flags: flags, white: paper, black: black, th: T, grid: grid, absent: absent };
+    // ความคมของภาพ: ค่าเฉลี่ยความต่างของพิกเซลติดกันบนขอบวงพิมพ์ (ภาพเบลอ = ต่ำ)
+    let edge = 0, ne = 0;
+    for (let y = 95 * PX; y < 250 * PX; y += 9) for (let x = 20 * PX; x < 190 * PX; x += 3) {
+      const a1 = ink(x, y), a2 = ink(x + 1, y);
+      edge += Math.abs(a1 - a2); ne++;
+    }
+    const sharp = Math.round(edge / ne / Math.max(1, span) * 1000) / 10;
+    return { answers: answers.join(''), fills: fills, flags: flags, white: paper, black: black, th: T, grid: grid, absent: absent, sharp: sharp, align: off };
   }
 
   /** ภาพพรีวิว: ทำเครื่องหมายคำตอบที่อ่านได้ (เขียว) และข้อที่ต้องตรวจ (ส้ม) */
@@ -999,7 +1046,7 @@ async function call(action, payload) {
 /** ทดสอบการเชื่อมต่อ: เรียก ?page=ping แล้วลองส่งคำสั่งทดสอบ */
 async function testApi() {
   const out = [];
-  const NEED = 6;
+  const NEED = 12;
   const b = await initBridge();
   out.push(b ? '✅ ทางสะพานพร้อม (เสถียรที่สุด)' : '⚠️ ทางสะพานไม่พร้อม (ยังไม่มีไฟล์ Bridge หรือยังไม่ Deploy) จะใช้ POST ตรงแทน');
   try {
@@ -1334,6 +1381,8 @@ function grabWithPoints(found) {
   return { canvas: full, pts: pts };
 }
 
+const BLUR_MIN = 1.0;        // ความคมต่ำกว่านี้ = เบลอ (ภาพปกติ 2–3, เบลอจนอ่านพลาดประมาณ 0.8)
+let blurTries = 0;
 function capture(manual, found) {
   if (reading) return;
   reading = true;
@@ -1347,6 +1396,13 @@ function capture(manual, found) {
     } catch (e) { r = { ok: false, error: e.message }; }
     reading = false; stable = 0; seenSince = 0;
     if (!r.ok) { setBanner('⚠️ ' + r.error, 'warn'); if (manual) beep(330, 120, 2); return; }
+    // ภาพเบลอ (มือสั่น/โฟกัสไม่ทัน): ถ่ายใหม่อัตโนมัติสูงสุด 2 ครั้ง ก่อนอ่านคำตอบผิด
+    if (!manual && r.sharp != null && r.sharp < BLUR_MIN && blurTries < 2) {
+      blurTries++;
+      setBanner('📷 ภาพเบลอ ถือนิ่งๆ ระบบจะถ่ายใหม่ (' + blurTries + '/2)', 'warn');
+      return;
+    }
+    blurTries = 0;
     // รหัสจากช่องฝนรหัส (กระดาษรุ่นใหม่) หรือ QR/แถบรหัส (รุ่นก่อน)
     let m = r.studentId ? [null, r.studentId, r.levelDigit || ''] : null;
     let mismatch = '';
@@ -1453,6 +1509,7 @@ function openResult(it) {
 }
 function renderResult() {
   const it = CUR;
+  const blurNote = it.raw && it.raw.sharp != null && it.raw.sharp < 1.2 ? '<div class="rs-sub" style="color:#B7791F">📷 ภาพไม่ค่อยคม ตรวจคำตอบให้ดี หรือกดถ่ายใหม่</div>' : '';
   const st = { saved: '💾 บันทึกแล้ว ' + (it.total != null ? it.total + ' คะแนน' : '') + ' (แก้แล้วกดบันทึกการแก้ไข)', ready: it.flags.length ? '⚠️ ต้องดู ' + it.flags.length + ' ข้อ: ' + it.flags.join(', ') : '✅ อ่านได้ชัดเจนทุกข้อ', needid: '🔢 ' + it.error, error: '❌ ' + it.error }[it.status];
   const blank = [...it.answers].filter(a => a === '0').length;
   $('rsBody').innerHTML =
@@ -1460,6 +1517,7 @@ function renderResult() {
     '<div class="rs-name">' + esc(it.name) + '</div>' +
     '<div class="rs-sub">' + (it.id ? 'รหัส ' + esc(it.id) + ' · ' : '') + esc(it.level || '') + (it.room ? ' ห้องสอบ ' + esc(it.room) : '') + '</div>' +
     '<div class="rs-st st-' + (it.status === 'ready' && it.flags.length ? 'flag' : it.status) + '">' + esc(st) + '</div>' +
+    blurNote +
     (it.status === 'ready' || it.status === 'saved' ? '<div class="rs-score" id="rsScore">' + scoreHtml(it) + '</div>' : '') +
     '<div class="rs-sub">ตอบ ' + (it.n - blank) + ' ข้อ · ว่าง ' + blank + ' ข้อ · วงเขียว = ถูก · วงแดง = ผิด · แถบเหลือง = ต้องตรวจทาน' +
     (it.raw && it.raw.idSource === 'strip' ? ' · อ่านรหัสจากแถบใต้ช่องลายมือชื่อ' : '') + '</div>' +
